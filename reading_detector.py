@@ -10,20 +10,21 @@ def detect_checkboxes(image, avg_width):
     width = image.shape[1]
     right_area = image[:, width*3//4:]  # 오른쪽 25% 영역만 처리
     
-    # 체크란 크기 범위 설정 (답안 프레임의 50% 기준, ±10% 허용)
+    # 체크란 크기 범위 설정 (답안 프레임의 50% 기준, ±15% 허용)
     checkbox_size = avg_width * 0.5
-    checkbox_range = (int(checkbox_size * 0.9), int(checkbox_size * 1.1))
+    checkbox_range = (int(checkbox_size * 0.85), int(checkbox_size * 1.15))
     
     print(f"체크란 크기 범위: {checkbox_range[0]}~{checkbox_range[1]}")
     
-    # 검은색 체크란 감지를 위한 이진화
+    # 검은색 체크란 감지를 위한 이진화 (임계값 조정)
     lower_black = np.array([0, 0, 0])
-    upper_black = np.array([50, 50, 50])
+    upper_black = np.array([80, 80, 80])  # 임계값 증가
     black_mask = cv2.inRange(right_area, lower_black, upper_black)
     
-    # 모폴로지 연산으로 노이즈 제거
-    kernel = np.ones((2,2), np.uint8)
+    # 모폴로지 연산으로 노이즈 제거 및 체크란 강화
+    kernel = np.ones((3,3), np.uint8)
     black_mask = cv2.morphologyEx(black_mask, cv2.MORPH_CLOSE, kernel)
+    black_mask = cv2.morphologyEx(black_mask, cv2.MORPH_OPEN, kernel)
     
     # 디버깅을 위해 black_mask 저장
     cv2.imwrite('debug_black_mask.jpg', black_mask)
@@ -38,35 +39,40 @@ def detect_checkboxes(image, avg_width):
         x, y, w, h = cv2.boundingRect(cnt)
         aspect_ratio = w/h if h != 0 else 0
         
-        # 체크란 크기 조건 확인
+        # 체크란 크기 조건 확인 (조건 완화)
         if (checkbox_range[0] <= w <= checkbox_range[1] and 
             checkbox_range[0] <= h <= checkbox_range[1] and 
-            0.8 < aspect_ratio < 1.2):
+            0.75 < aspect_ratio < 1.25):  # 비율 범위 확대
             
-            # 테두리를 제외한 내부 영역 추출 (10% 패딩)
-            padding_ratio = 0.1
+            # 테두리를 제외한 내부 영역 추출 (패딩 축소)
+            padding_ratio = 0.05  # 패딩 비율 축소
             pad_x = int(w * padding_ratio)
             pad_y = int(h * padding_ratio)
             
-            # 박스 내부 영역 추출
+            # 박스 내부 영역 추출 및 적응형 이진화 적용
             roi = right_area[y+pad_y:y+h-pad_y, x+pad_x:x+w-pad_x]
-            gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-            _, thresh = cv2.threshold(gray_roi, 200, 255, cv2.THRESH_BINARY)
-            
-            # 흰색 픽셀 비율 계산
-            white_pixels = np.sum(thresh == 255)
-            total_pixels = roi.shape[0] * roi.shape[1]
-            white_ratio = white_pixels / total_pixels
-            
-            print(f"체크란 후보 {i}: 크기 {w}x{h}, 비율 {aspect_ratio:.2f}, 흰색 비율 {white_ratio:.3f}")
-            
-            checkboxes.append({
-                'position': (x + width*3//4, y),  # 전체 이미지 기준 좌표로 변환
-                'size': (w, h),
-                'white_ratio': white_ratio,
-                'is_checked': False,
-                'number': None
-            })
+            if roi.size > 0:  # ROI가 유효한 경우에만 처리
+                gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+                # 적응형 이진화 적용
+                thresh = cv2.adaptiveThreshold(
+                    gray_roi, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                    cv2.THRESH_BINARY, 11, 2
+                )
+                
+                # 흰색 픽셀 비율 계산 (임계값 조정)
+                white_pixels = np.sum(thresh == 255)
+                total_pixels = roi.shape[0] * roi.shape[1]
+                white_ratio = white_pixels / total_pixels
+                
+                print(f"체크란 후보 {i}: 크기 {w}x{h}, 비율 {aspect_ratio:.2f}, 흰색 비율 {white_ratio:.3f}")
+                
+                checkboxes.append({
+                    'position': (x + width*3//4, y),  # 전체 이미지 기준 좌표로 변환
+                    'size': (w, h),
+                    'white_ratio': white_ratio,
+                    'is_checked': False,
+                    'number': None
+                })
     
     # 체크박스들을 y 좌표 기준으로 정렬
     checkboxes.sort(key=lambda box: box['position'][1])
@@ -80,12 +86,13 @@ def detect_checkboxes(image, avg_width):
     selected_question = 'question01'  # 기본값 설정
     
     if len(checkboxes) >= 4:
-        # 흰색 비율이 가장 낮은 체크박스 찾기
+        # 흰색 비율이 가장 낮은 체크박스 찾기 (임계값 조정)
         min_white_ratio = float('inf')
         selected_box = None
         
         for box in checkboxes[:4]:
-            if box['white_ratio'] < min_white_ratio:
+            # 흰색 비율이 0.85 미만이고 가장 낮은 경우를 체크된 것으로 간주
+            if box['white_ratio'] < 0.85 and box['white_ratio'] < min_white_ratio:
                 min_white_ratio = box['white_ratio']
                 selected_box = box
         
@@ -199,13 +206,16 @@ def reading_detect_and_save_frames(image_path, output_dir):
     # 체크란 감지
     selected_question, checkboxes = detect_checkboxes(image, avg_width)
     
+    # 선택된 문제 번호 추출
+    selected_number = selected_question.replace('question', '')
+    
     # 체크란 이미지 저장
     for i, box in enumerate(checkboxes, 1):
         x, y = box['position']
         w, h = box['size']
         padding = 2
         checkbox = image[y-padding:y+h+padding, x-padding:x+w+padding]
-        output_path = os.path.join(output_dir, f"checkbox_{i}.jpg")
+        output_path = os.path.join(output_dir, f"answer{selected_number}_checkbox_{i}.jpg")
         cv2.imwrite(output_path, checkbox)
         print(f"체크란 저장됨: {output_path}")
     
@@ -306,9 +316,11 @@ def reading_detect_and_save_frames(image_path, output_dir):
                                 valid_height_range[0] <= sh <= valid_height_range[1]):
                                 # 프레임 찾음
                                 frame = search_area[sy:sy+sh, sx:sx+sw]
+                                
+                                # 파일명 생성 (모든 프레임에 answer 접두사 추가)
                                 output_path = os.path.join(
                                     output_dir, 
-                                    f"question{question_num}_repeat{(row//4)+1}_box{(row%4)+1}.jpg"
+                                    f"answer{selected_number}_question{question_num}_repeat{(row//4)+1}_box{(row%4)+1}.jpg"
                                 )
                                 cv2.imwrite(output_path, frame)
                                 print(f"추가 저장됨: {output_path} (위치: {col},{row})")
@@ -329,10 +341,10 @@ def reading_detect_and_save_frames(image_path, output_dir):
                 repeat_num = (row // 4) + 1  # 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3
                 box_num = (row % 4) + 1      # 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4
                 
-                # 파일명 생성
+                # 파일명 생성 (모든 프레임에 answer 접두사 추가)
                 output_path = os.path.join(
                     output_dir, 
-                    f"question{question_num}_repeat{repeat_num}_box{box_num}.jpg"
+                    f"answer{selected_number}_question{question_num}_repeat{repeat_num}_box{box_num}.jpg"
                 )
                 cv2.imwrite(output_path, frame)
                 print(f"저장됨: {output_path} (위치: {col},{row})")
