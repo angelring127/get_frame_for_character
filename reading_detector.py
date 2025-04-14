@@ -2,13 +2,13 @@ import cv2
 import numpy as np
 import os
 
-def detect_checkboxes(image, avg_width):
+def detect_checkboxes(image, avg_width, output_dir):
     """
     이미지에서 체크란을 감지하고 선택된 문제 번호를 반환합니다.
     """
     height = image.shape[0]
     width = image.shape[1]
-    right_area = image[:, width*3//4:]  # 오른쪽 25% 영역만 처리
+    right_area = image[:, int(width*0.82):]  # 오른쪽 18% 영역만 처리
     
     # 체크란 크기 범위 설정 (답안 프레임의 50% 기준, ±15% 허용)
     checkbox_size = avg_width * 0.5
@@ -27,7 +27,7 @@ def detect_checkboxes(image, avg_width):
     black_mask = cv2.morphologyEx(black_mask, cv2.MORPH_OPEN, kernel)
     
     # 디버깅을 위해 black_mask 저장
-    cv2.imwrite('debug_black_mask.jpg', black_mask)
+    cv2.imwrite(os.path.join(output_dir, 'debug_black_mask.jpg'), black_mask)
     
     # 체크란 윤곽선 찾기
     checkbox_contours, _ = cv2.findContours(black_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -53,13 +53,11 @@ def detect_checkboxes(image, avg_width):
             roi = right_area[y+pad_y:y+h-pad_y, x+pad_x:x+w-pad_x]
             if roi.size > 0:  # ROI가 유효한 경우에만 처리
                 gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-                # 적응형 이진화 적용
                 thresh = cv2.adaptiveThreshold(
                     gray_roi, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
                     cv2.THRESH_BINARY, 11, 2
                 )
                 
-                # 흰색 픽셀 비율 계산 (임계값 조정)
                 white_pixels = np.sum(thresh == 255)
                 total_pixels = roi.shape[0] * roi.shape[1]
                 white_ratio = white_pixels / total_pixels
@@ -67,19 +65,39 @@ def detect_checkboxes(image, avg_width):
                 print(f"체크란 후보 {i}: 크기 {w}x{h}, 비율 {aspect_ratio:.2f}, 흰색 비율 {white_ratio:.3f}")
                 
                 checkboxes.append({
-                    'position': (x + width*3//4, y),  # 전체 이미지 기준 좌표로 변환
+                    'position': (x + int(width*0.82), y),  # 전체 이미지 기준 좌표로 변환 (0.82로 수정)
                     'size': (w, h),
                     'white_ratio': white_ratio,
                     'is_checked': False,
                     'number': None
                 })
     
-    # 체크박스들을 y 좌표 기준으로 정렬
-    checkboxes.sort(key=lambda box: box['position'][1])
-    
-    # 체크박스 번호 할당 (1부터 4까지)
+    # 체크박스들을 x 좌표가 비슷한 것들끼리 그룹화
     if len(checkboxes) >= 4:
-        for i, box in enumerate(checkboxes[:4]):
+        # x 좌표 기준으로 정렬
+        checkboxes.sort(key=lambda box: box['position'][0])
+        
+        # x 좌표가 비슷한 체크박스들을 그룹화 (허용 오차: avg_width의 10%)
+        x_tolerance = avg_width * 0.1
+        grouped_boxes = []
+        current_group = [checkboxes[0]]
+        
+        for box in checkboxes[1:]:
+            if abs(box['position'][0] - current_group[0]['position'][0]) <= x_tolerance:
+                current_group.append(box)
+            else:
+                if len(current_group) >= 4:  # 유효한 그룹만 저장
+                    grouped_boxes.extend(current_group[:4])
+                current_group = [box]
+        
+        if len(current_group) >= 4:  # 마지막 그룹 처리
+            grouped_boxes.extend(current_group[:4])
+        
+        # y 좌표로 정렬하여 1-4번 할당
+        grouped_boxes.sort(key=lambda box: box['position'][1])
+        checkboxes = grouped_boxes[:4]
+        
+        for i, box in enumerate(checkboxes):
             box['number'] = f"question{i+1}"
     
     # 체크박스 감지 부분 수정
@@ -121,9 +139,44 @@ def detect_checkboxes(image, avg_width):
     print("=====================\n")
     
     # 디버깅을 위해 처리된 이미지 저장
-    cv2.imwrite('debug_checkboxes.jpg', image)
+    cv2.imwrite(os.path.join(output_dir, 'debug_checkboxes.jpg'), image)
     
     return selected_question, checkboxes
+
+def clean_frame_border(frame):
+    """
+    프레임 이미지의 테두리 잔여물을 제거합니다.
+    """
+    # 그레이스케일 변환
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    
+    # 이진화
+    _, binary = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
+    
+    # 모폴로지 연산으로 테두리 정리
+    kernel = np.ones((3,3), np.uint8)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+    
+    # 윤곽선 찾기
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    if contours:
+        # 가장 큰 윤곽선 찾기
+        max_contour = max(contours, key=cv2.contourArea)
+        x, y, w, h = cv2.boundingRect(max_contour)
+        
+        # 여백 추가 (내부 영역 보존)
+        padding = 2
+        x = max(0, x - padding)
+        y = max(0, y - padding)
+        w = min(frame.shape[1] - x, w + 2*padding)
+        h = min(frame.shape[0] - y, h + 2*padding)
+        
+        # 정리된 영역 추출
+        cleaned_frame = frame[y:y+h, x:x+w]
+        return cleaned_frame
+    
+    return frame
 
 def reading_detect_and_save_frames(image_path, output_dir):
     # 출력 디렉토리 생성
@@ -152,7 +205,7 @@ def reading_detect_and_save_frames(image_path, output_dir):
     thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
     
     # 디버깅을 위해 전처리된 이미지 저장
-    cv2.imwrite('debug_preprocessed.jpg', thresh)
+    cv2.imwrite(os.path.join(output_dir, 'debug_preprocessed.jpg'), thresh)
     
     # 모든 윤곽선 찾기 (RETR_EXTERNAL 대신 RETR_LIST 사용)
     contours, _ = cv2.findContours(
@@ -204,7 +257,7 @@ def reading_detect_and_save_frames(image_path, output_dir):
     print("=====================\n")
     
     # 체크란 감지
-    selected_question, checkboxes = detect_checkboxes(image, avg_width)
+    selected_question, checkboxes = detect_checkboxes(image, avg_width, output_dir)
     
     # 선택된 문제 번호 추출
     selected_number = selected_question.replace('question', '')
@@ -214,7 +267,9 @@ def reading_detect_and_save_frames(image_path, output_dir):
         x, y = box['position']
         w, h = box['size']
         padding = 2
-        checkbox = image[y-padding:y+h+padding, x-padding:x+w+padding]
+        checkbox = image[y-padding:y+h+padding, x-padding:x+w-padding]
+        # 테두리 잔여물 제거
+        checkbox = clean_frame_border(checkbox)
         output_path = os.path.join(output_dir, f"answer{selected_number}_checkbox_{i}.jpg")
         cv2.imwrite(output_path, checkbox)
         print(f"체크란 저장됨: {output_path}")
@@ -316,6 +371,8 @@ def reading_detect_and_save_frames(image_path, output_dir):
                                 valid_height_range[0] <= sh <= valid_height_range[1]):
                                 # 프레임 찾음
                                 frame = search_area[sy:sy+sh, sx:sx+sw]
+                                # 테두리 잔여물 제거
+                                frame = clean_frame_border(frame)
                                 
                                 # 파일명 생성 (모든 프레임에 answer 접두사 추가)
                                 output_path = os.path.join(
@@ -336,6 +393,8 @@ def reading_detect_and_save_frames(image_path, output_dir):
             if position_key not in extracted_positions:
                 padding = 5
                 frame = image[y+padding:y+h-padding, x+padding:x+w-padding]
+                # 테두리 잔여물 제거
+                frame = clean_frame_border(frame)
                 
                 # repeat와 box 번호 계산
                 repeat_num = (row // 4) + 1  # 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3

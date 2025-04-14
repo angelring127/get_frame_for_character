@@ -2,6 +2,41 @@ import cv2
 import numpy as np
 import os
 
+def clean_frame_border(frame):
+    """
+    프레임 이미지의 테두리 잔여물을 제거합니다.
+    """
+    # 그레이스케일 변환
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    
+    # 이진화
+    _, binary = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
+    
+    # 모폴로지 연산으로 테두리 정리
+    kernel = np.ones((3,3), np.uint8)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+    
+    # 윤곽선 찾기
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    if contours:
+        # 가장 큰 윤곽선 찾기
+        max_contour = max(contours, key=cv2.contourArea)
+        x, y, w, h = cv2.boundingRect(max_contour)
+        
+        # 여백 추가 (내부 영역 보존)
+        padding = 2
+        x = max(0, x - padding)
+        y = max(0, y - padding)
+        w = min(frame.shape[1] - x, w + 2*padding)
+        h = min(frame.shape[0] - y, h + 2*padding)
+        
+        # 정리된 영역 추출
+        cleaned_frame = frame[y:y+h, x:x+w]
+        return cleaned_frame
+    
+    return frame
+
 def writing_detect_and_save_frames(image_path, output_dir):
     # 출력 디렉토리 생성
     if not os.path.exists(output_dir):
@@ -55,7 +90,7 @@ def writing_detect_and_save_frames(image_path, output_dir):
     black_mask = cv2.morphologyEx(black_mask, cv2.MORPH_CLOSE, kernel)
     
     # 디버깅을 위해 black_mask 저장
-    cv2.imwrite('debug_black_mask.jpg', black_mask)
+    cv2.imwrite(os.path.join(output_dir, 'debug_black_mask.jpg'), black_mask)
     
     # 체크란 윤곽선 찾기
     checkbox_contours, _ = cv2.findContours(black_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -83,8 +118,8 @@ def writing_detect_and_save_frames(image_path, output_dir):
             _, v_thresh = cv2.threshold(gray_roi, 200, 255, cv2.THRESH_BINARY)
             
             # 디버깅을 위해 ROI 저장
-            cv2.imwrite(f'debug_checkbox_roi_{i}.jpg', roi)
-            cv2.imwrite(f'debug_checkbox_thresh_{i}.jpg', v_thresh)
+            cv2.imwrite(os.path.join(output_dir, f'debug_checkbox_roi_{i}.jpg'), roi)
+            cv2.imwrite(os.path.join(output_dir, f'debug_checkbox_thresh_{i}.jpg'), v_thresh)
             
             white_pixels = np.sum(v_thresh == 255)
             total_pixels = (w-2*pad_x) * (h-2*pad_y)  # 내부 영역 크기
@@ -148,7 +183,7 @@ def writing_detect_and_save_frames(image_path, output_dir):
     print("=====================\n")
     
     # 디버깅을 위해 처리된 이미지 저장
-    cv2.imwrite('debug_checkboxes.jpg', image)
+    cv2.imwrite(os.path.join(output_dir, 'debug_checkboxes.jpg'), image)
     
     # 체크란 이미지 저장
     for i, box in enumerate(checkboxes, 1):
@@ -156,6 +191,8 @@ def writing_detect_and_save_frames(image_path, output_dir):
         w, h = box['size']
         padding = 2
         checkbox = image[y-padding:y+h+padding, x-padding:x+w+padding]
+        # 테두리 잔여물 제거
+        checkbox = clean_frame_border(checkbox)
         output_path = os.path.join(output_dir, f"checkbox_{i}.jpg")
         cv2.imwrite(output_path, checkbox)
         print(f"체크란 저장됨: {output_path}")
@@ -206,6 +243,8 @@ def writing_detect_and_save_frames(image_path, output_dir):
             if col_idx > 3: continue
             padding = 5
             frame = image[y+padding:y+h-padding, x+padding:x+w-padding]
+            # 테두리 잔여물 제거
+            frame = clean_frame_border(frame)
             repeat_suffix = {1: "03", 2: "02", 3: "01"}[col_idx]  # 역순으로 변경
             output_path = os.path.join(output_dir, f"frame_{selected_q2}_{row_idx}_{repeat_suffix}.jpg")
             cv2.imwrite(output_path, frame)
@@ -216,6 +255,8 @@ def writing_detect_and_save_frames(image_path, output_dir):
             if col_idx > 3: continue
             padding = 5
             frame = image[y+padding:y+h-padding, x+padding:x+w-padding]
+            # 테두리 잔여물 제거
+            frame = clean_frame_border(frame)
             repeat_suffix = {1: "03", 2: "02", 3: "01"}[col_idx]  # 역순으로 변경
             output_path = os.path.join(output_dir, f"frame_{selected_q1}_{row_idx}_{repeat_suffix}.jpg")
             cv2.imwrite(output_path, frame)
