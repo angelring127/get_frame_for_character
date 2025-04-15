@@ -143,40 +143,207 @@ def detect_checkboxes(image, avg_width, output_dir):
     
     return selected_question, checkboxes
 
-def clean_frame_border(frame):
+def clean_frame_border(frame, is_edge=False):
     """
     프레임 이미지의 테두리 잔여물을 제거합니다.
+    가장자리 프레임의 경우 더 강력한 처리를 적용합니다.
     """
+    # 원본 이미지 보존
+    original = frame.copy()
+    
     # 그레이스케일 변환
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     
-    # 이진화
-    _, binary = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
+    # 노이즈 제거를 위한 블러 적용
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    
+    # 가장자리 프레임의 경우 더 강력한 처리
+    if is_edge:
+        # 더 강력한 블러 적용
+        blurred = cv2.GaussianBlur(blurred, (7, 7), 0)
+        
+        # 적응형 이진화 임계값 조정
+        thresh = cv2.adaptiveThreshold(
+            blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY, 15, 5
+        )
+    else:
+        thresh = cv2.adaptiveThreshold(
+            blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY, 11, 2
+        )
     
     # 모폴로지 연산으로 테두리 정리
-    kernel = np.ones((3,3), np.uint8)
-    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+    kernel_size = 5 if is_edge else 3
+    kernel = np.ones((kernel_size, kernel_size), np.uint8)
+    thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+    thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
     
     # 윤곽선 찾기
-    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
     if contours:
         # 가장 큰 윤곽선 찾기
         max_contour = max(contours, key=cv2.contourArea)
         x, y, w, h = cv2.boundingRect(max_contour)
         
-        # 여백 추가 (내부 영역 보존)
-        padding = 2
-        x = max(0, x - padding)
-        y = max(0, y - padding)
-        w = min(frame.shape[1] - x, w + 2*padding)
-        h = min(frame.shape[0] - y, h + 2*padding)
+        # 여백 설정 (가장자리 프레임은 더 큰 여백)
+        padding = 8 if is_edge else 5
+        x = max(0, x + padding)
+        y = max(0, y + padding)
+        w = min(frame.shape[1] - x, w - 2*padding)
+        h = min(frame.shape[0] - y, h - 2*padding)
         
-        # 정리된 영역 추출
-        cleaned_frame = frame[y:y+h, x:x+w]
-        return cleaned_frame
+        # 잘라낸 영역이 유효한지 확인
+        if w > 0 and h > 0:
+            # 내부 영역 추출
+            cleaned_frame = original[y:y+h, x:x+w]
+            
+            # 테두리 블렌딩
+            border_width = 3 if is_edge else 2
+            alpha = 0.2 if is_edge else 0.1
+            
+            # 흰색 배경과 블렌딩
+            white_border = np.ones_like(cleaned_frame) * 255
+            
+            # 테두리 블렌딩 적용
+            cleaned_frame[:border_width] = cv2.addWeighted(
+                cleaned_frame[:border_width], 1-alpha,
+                white_border[:border_width], alpha, 0
+            )
+            cleaned_frame[-border_width:] = cv2.addWeighted(
+                cleaned_frame[-border_width:], 1-alpha,
+                white_border[-border_width:], alpha, 0
+            )
+            cleaned_frame[:, :border_width] = cv2.addWeighted(
+                cleaned_frame[:, :border_width], 1-alpha,
+                white_border[:, :border_width], alpha, 0
+            )
+            cleaned_frame[:, -border_width:] = cv2.addWeighted(
+                cleaned_frame[:, -border_width:], 1-alpha,
+                white_border[:, -border_width:], alpha, 0
+            )
+            
+            return cleaned_frame
     
     return frame
+
+def create_a4_canvas(image_width, image_height, avg_width, avg_height, avg_col_spacing, avg_row_spacing):
+    """
+    A4 크기의 흰색 캔버스를 생성합니다.
+    A4 크기는 210mm x 297mm이며, 300dpi에서는 2480 x 3508 픽셀입니다.
+    """
+    # A4 크기 (300dpi 기준)
+    a4_width = 2480
+    a4_height = 3508
+    
+    # 여백 설정 (상하좌우 각각 5% 여백)
+    margin_ratio = 0.05
+    usable_width = int(a4_width * (1 - 2 * margin_ratio))
+    usable_height = int(a4_height * (1 - 2 * margin_ratio))
+    
+    # 원본 이미지의 비율을 유지하면서 A4 크기에 맞게 조정
+    scale_factor = min(usable_width / image_width, usable_height / image_height)
+    
+    # 스케일링된 이미지 크기
+    scaled_width = int(image_width * scale_factor)
+    scaled_height = int(image_height * scale_factor)
+    
+    # 중앙 정렬을 위한 여백 계산
+    left_margin = int((a4_width - scaled_width) / 2)
+    top_margin = int((a4_height - scaled_height) / 2)
+    
+    # 흰색 배경 생성
+    canvas = np.ones((a4_height, a4_width, 3), dtype=np.uint8) * 255
+    
+    return canvas, scale_factor, left_margin, top_margin
+
+def merge_images_on_canvas(image_path, output_dir, canvas, scale_factor, left_margin, top_margin, frame_grid, avg_width, avg_height, avg_col_spacing, avg_row_spacing):
+    """
+    추출된 이미지들을 A4 캔버스에 원래 위치 그대로 배치합니다.
+    """
+    # 원본 이미지 로드
+    original_image = cv2.imread(image_path)
+    if original_image is None:
+        raise ValueError(f"이미지를 불러올 수 없습니다: {image_path}")
+    
+    # 각 열의 x 좌표와 각 행의 y 좌표 수집
+    col_x_coords = [[] for _ in range(7)]
+    row_y_coords = [[] for _ in range(12)]
+    
+    for row in range(12):
+        for col in range(7):
+            frame = frame_grid[row][col]
+            if frame is not None:
+                x, y, w, h = frame
+                col_x_coords[col].append(x)
+                row_y_coords[row].append(y)
+    
+    # 각 열과 행의 대표 좌표 계산 (중간값 사용)
+    col_positions = []
+    row_positions = []
+    
+    for col_coords in col_x_coords:
+        if col_coords:
+            col_positions.append(int(np.median(col_coords)))
+        else:
+            if col_positions:
+                col_positions.append(col_positions[-1] + int(avg_col_spacing))
+            else:
+                col_positions.append(0)
+    
+    for row_coords in row_y_coords:
+        if row_coords:
+            row_positions.append(int(np.median(row_coords)))
+        else:
+            if row_positions:
+                row_positions.append(row_positions[-1] + int(avg_row_spacing))
+            else:
+                row_positions.append(0)
+    
+    # 최소 좌표 계산
+    min_x = min(col_positions)
+    min_y = min(row_positions)
+    
+    # 캔버스에 이미지 배치
+    for row in range(12):
+        for col in range(7):
+            frame = frame_grid[row][col]
+            if frame is not None:
+                x, y, w, h = frame
+                
+                # 원본 이미지에서 프레임 추출
+                padding = 5
+                frame_img = original_image[y+padding:y+h-padding, x+padding:x+w-padding]
+                
+                # 가장자리 프레임 여부 확인
+                is_edge = (col == 0 or col == 6 or row == 11)
+                frame_img = clean_frame_border(frame_img, is_edge)
+                
+                if frame_img is not None and frame_img.size > 0:
+                    # 스케일 조정
+                    new_w = int(frame_img.shape[1] * scale_factor)
+                    new_h = int(frame_img.shape[0] * scale_factor)
+                    frame_img = cv2.resize(frame_img, (new_w, new_h))
+                    
+                    # 정렬된 위치 계산 (스케일 적용 + 여백 추가)
+                    canvas_x = left_margin + int((col_positions[col] - min_x) * scale_factor)
+                    canvas_y = top_margin + int((row_positions[row] - min_y) * scale_factor)
+                    
+                    # 캔버스 범위 확인
+                    if (canvas_y + new_h <= canvas.shape[0] and 
+                        canvas_x + new_w <= canvas.shape[1]):
+                        try:
+                            canvas[canvas_y:canvas_y+new_h, 
+                                  canvas_x:canvas_x+new_w] = frame_img
+                        except ValueError as e:
+                            print(f"이미지 배치 중 오류 발생: {e}")
+                            print(f"위치: ({row}, {col}), 크기: {frame_img.shape}")
+    
+    # 결과 저장
+    output_path = os.path.join(output_dir, 'merged_a4.jpg')
+    cv2.imwrite(output_path, canvas)
+    print(f"A4 이미지 병합 완료: {output_path}")
 
 def reading_detect_and_save_frames(image_path, output_dir):
     # 출력 디렉토리 생성
@@ -413,4 +580,19 @@ def reading_detect_and_save_frames(image_path, output_dir):
     print(f"\n총 추출된 프레임 수: {total_frames}/84")
     if total_frames < 84:
         print("경고: 일부 프레임이 누락되었습니다.")
-    print("\n프레임 추출 완료") 
+    print("\n프레임 추출 완료")
+    
+    # A4 캔버스 생성 및 이미지 병합
+    canvas, scale_factor, left_margin, top_margin = create_a4_canvas(
+        image.shape[1], image.shape[0], 
+        avg_width, avg_height, 
+        avg_col_spacing, avg_row_spacing
+    )
+    
+    # 캔버스에 이미지 병합
+    merge_images_on_canvas(
+        image_path, output_dir, canvas, scale_factor, 
+        left_margin, top_margin, frame_grid, 
+        avg_width, avg_height, 
+        avg_col_spacing, avg_row_spacing
+    ) 
