@@ -147,6 +147,10 @@ def clean_frame_border(frame, is_edge=False):
     """
     프레임 이미지의 테두리 잔여물을 제거합니다.
     가장자리 프레임의 경우 더 강력한 처리를 적용합니다.
+    
+    Args:
+        frame: 처리할 프레임 이미지
+        is_edge: 가장자리 프레임 여부 (True인 경우 더 강력한 처리 적용)
     """
     # 원본 이미지 보존
     original = frame.copy()
@@ -228,124 +232,108 @@ def clean_frame_border(frame, is_edge=False):
     
     return frame
 
-def create_a4_canvas(image_width, image_height, avg_width, avg_height, avg_col_spacing, avg_row_spacing):
+def create_template_output(image_path, template_path, output_dir):
     """
-    A4 크기의 흰색 캔버스를 생성합니다.
-    A4 크기는 210mm x 297mm이며, 300dpi에서는 2480 x 3508 픽셀입니다.
+    템플릿 이미지에 프레임을 배치하여 출력합니다.
+    5번째 줄 왼쪽부터 선택된 답안의 프레임을 순서대로 배치합니다.
+    템플릿 이미지는 5000x5000px 크기로 고정됩니다.
+    프레임 크기: 130x130px, 간격: 20px
     """
-    # A4 크기 (300dpi 기준)
-    a4_width = 2480
-    a4_height = 3508
+    # 템플릿 이미지 로드
+    template = cv2.imread(template_path)
+    if template is None:
+        raise ValueError(f"템플릿 이미지를 불러올 수 없습니다: {template_path}")
     
-    # 여백 설정 (상하좌우 각각 5% 여백)
-    margin_ratio = 0.05
-    usable_width = int(a4_width * (1 - 2 * margin_ratio))
-    usable_height = int(a4_height * (1 - 2 * margin_ratio))
+    # 템플릿 크기를 5000x5000으로 고정
+    template = cv2.resize(template, (5000, 5000))
+    output = template.copy()
     
-    # 원본 이미지의 비율을 유지하면서 A4 크기에 맞게 조정
-    scale_factor = min(usable_width / image_width, usable_height / image_height)
+    # 템플릿 프레임 설정
+    frame_size = 130
+    gap = 20
+    rows = 22
+    cols = 22
     
-    # 스케일링된 이미지 크기
-    scaled_width = int(image_width * scale_factor)
-    scaled_height = int(image_height * scale_factor)
+    # 시작 위치 계산 (중앙 정렬)
+    start_x = (template.shape[1] - (cols * (frame_size + gap) - gap)) // 2
+    start_y = (template.shape[0] - (rows * (frame_size + gap) - gap)) // 2
     
-    # 중앙 정렬을 위한 여백 계산
-    left_margin = int((a4_width - scaled_width) / 2)
-    top_margin = int((a4_height - scaled_height) / 2)
+    # 5번째 줄부터 시작
+    start_row = 4
     
-    # 흰색 배경 생성
-    canvas = np.ones((a4_height, a4_width, 3), dtype=np.uint8) * 255
+    # 프레임 위치 계산
+    template_frames = []
+    for row in range(start_row, rows):
+        for col in range(cols):
+            x = start_x + col * (frame_size + gap)
+            y = start_y + row * (frame_size + gap)
+            template_frames.append((x, y, frame_size, frame_size))
     
-    return canvas, scale_factor, left_margin, top_margin
-
-def merge_images_on_canvas(image_path, output_dir, canvas, scale_factor, left_margin, top_margin, frame_grid, avg_width, avg_height, avg_col_spacing, avg_row_spacing):
-    """
-    추출된 이미지들을 A4 캔버스에 원래 위치 그대로 배치합니다.
-    """
-    # 원본 이미지 로드
-    original_image = cv2.imread(image_path)
-    if original_image is None:
-        raise ValueError(f"이미지를 불러올 수 없습니다: {image_path}")
+    # 추출된 이미지 파일 목록 가져오기
+    extracted_files = []
+    for file in os.listdir(output_dir):
+        if file.startswith('answer') and file.endswith('.jpg') and 'checkbox' not in file:
+            # 파일명에서 번호 추출
+            parts = file.replace('.jpg', '').split('_')
+            answer = int(parts[0].replace('answer', ''))
+            question = int(parts[1].replace('question', ''))
+            repeat = int(parts[2].replace('repeat', ''))
+            box = int(parts[3].replace('box', ''))
+            extracted_files.append((file, answer, question, repeat, box))
     
-    # 각 열의 x 좌표와 각 행의 y 좌표 수집
-    col_x_coords = [[] for _ in range(7)]
-    row_y_coords = [[] for _ in range(12)]
+    # 파일 정렬: answer > question > repeat > box 순서
+    extracted_files.sort(key=lambda x: (x[1], x[2], x[3], x[4]))  # question은 1부터 7까지 오름차순
     
-    for row in range(12):
-        for col in range(7):
-            frame = frame_grid[row][col]
-            if frame is not None:
-                x, y, w, h = frame
-                col_x_coords[col].append(x)
-                row_y_coords[row].append(y)
-    
-    # 각 열과 행의 대표 좌표 계산 (중간값 사용)
-    col_positions = []
-    row_positions = []
-    
-    for col_coords in col_x_coords:
-        if col_coords:
-            col_positions.append(int(np.median(col_coords)))
+    # 프레임 배치
+    for i, file_info in enumerate(extracted_files):
+        if i >= len(template_frames):
+            break
+            
+        file_name = file_info[0]
+        frame_path = os.path.join(output_dir, file_name)
+        
+        frame = cv2.imread(frame_path)
+        if frame is None:
+            print(f"프레임을 로드할 수 없습니다: {frame_path}")
+            continue
+        
+        # 템플릿의 현재 프레임 위치
+        tx, ty, tw, th = template_frames[i]
+        
+        # 프레임 크기 조정 (비율 유지)
+        target_size = (tw-4, th-4)  # 여백을 위해 약간 작게
+        frame_ratio = frame.shape[1] / frame.shape[0]
+        target_ratio = target_size[0] / target_size[1]
+        
+        if frame_ratio > target_ratio:
+            new_width = target_size[0]
+            new_height = int(new_width / frame_ratio)
         else:
-            if col_positions:
-                col_positions.append(col_positions[-1] + int(avg_col_spacing))
-            else:
-                col_positions.append(0)
+            new_height = target_size[1]
+            new_width = int(new_height * frame_ratio)
+        
+        frame = cv2.resize(frame, (new_width, new_height))
+        
+        # 중앙 정렬을 위한 오프셋 계산
+        x_offset = tx + 2 + (tw - new_width) // 2
+        y_offset = ty + 2 + (th - new_height) // 2
+        
+        try:
+            output[y_offset:y_offset+new_height, x_offset:x_offset+new_width] = frame
+            current_row = i // cols
+            current_col = i % cols
+            print(f"프레임 배치: {file_name} -> ({x_offset}, {y_offset}) [행:{current_row}, 열:{current_col}]")
+        except ValueError as e:
+            print(f"프레임 배치 오류: {e}")
+            continue
     
-    for row_coords in row_y_coords:
-        if row_coords:
-            row_positions.append(int(np.median(row_coords)))
-        else:
-            if row_positions:
-                row_positions.append(row_positions[-1] + int(avg_row_spacing))
-            else:
-                row_positions.append(0)
-    
-    # 최소 좌표 계산
-    min_x = min(col_positions)
-    min_y = min(row_positions)
-    
-    # 캔버스에 이미지 배치
-    for row in range(12):
-        for col in range(7):
-            frame = frame_grid[row][col]
-            if frame is not None:
-                x, y, w, h = frame
-                
-                # 원본 이미지에서 프레임 추출
-                padding = 5
-                frame_img = original_image[y+padding:y+h-padding, x+padding:x+w-padding]
-                
-                # 가장자리 프레임 여부 확인
-                is_edge = (col == 0 or col == 6 or row == 11)
-                frame_img = clean_frame_border(frame_img, is_edge)
-                
-                if frame_img is not None and frame_img.size > 0:
-                    # 스케일 조정
-                    new_w = int(frame_img.shape[1] * scale_factor)
-                    new_h = int(frame_img.shape[0] * scale_factor)
-                    frame_img = cv2.resize(frame_img, (new_w, new_h))
-                    
-                    # 정렬된 위치 계산 (스케일 적용 + 여백 추가)
-                    canvas_x = left_margin + int((col_positions[col] - min_x) * scale_factor)
-                    canvas_y = top_margin + int((row_positions[row] - min_y) * scale_factor)
-                    
-                    # 캔버스 범위 확인
-                    if (canvas_y + new_h <= canvas.shape[0] and 
-                        canvas_x + new_w <= canvas.shape[1]):
-                        try:
-                            canvas[canvas_y:canvas_y+new_h, 
-                                  canvas_x:canvas_x+new_w] = frame_img
-                        except ValueError as e:
-                            print(f"이미지 배치 중 오류 발생: {e}")
-                            print(f"위치: ({row}, {col}), 크기: {frame_img.shape}")
-    
-    # 결과 저장
-    output_path = os.path.join(output_dir, 'merged_a4.jpg')
-    cv2.imwrite(output_path, canvas)
-    print(f"A4 이미지 병합 완료: {output_path}")
+    # 결과 이미지 저장
+    output_path = os.path.join(output_dir, 'template_output.jpg')
+    cv2.imwrite(output_path, output)
+    print(f"\n템플릿 출력 이미지 저장됨: {output_path}")
+    return output
 
-def reading_detect_and_save_frames(image_path, output_dir):
+def reading_detect_and_save_frames(image_path, output_dir, template_path=None):
     # 출력 디렉토리 생성
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -506,6 +494,9 @@ def reading_detect_and_save_frames(image_path, output_dir):
     # 추출된 프레임 위치 저장을 위한 집합
     extracted_positions = set()
     
+    # 프레임 저장을 위한 리스트
+    saved_frames = []
+    
     # 각 question(1-7)에 대한 행-열 매핑 처리
     total_frames = 0
     for col in range(7):  # 7개 열 (0-6)
@@ -549,50 +540,40 @@ def reading_detect_and_save_frames(image_path, output_dir):
                                 cv2.imwrite(output_path, frame)
                                 print(f"추가 저장됨: {output_path} (위치: {col},{row})")
                                 total_frames += 1
-                                break
                     else:
                         print(f"경고: question{question_num}_repeat{(row//4)+1}_box{(row%4)+1} 누락됨 (위치: {col},{row})")
                 continue
-            
+                
             x, y, w, h = frame
             # 중복 방지를 위한 위치 체크
             position_key = (x, y)
             if position_key not in extracted_positions:
                 padding = 5
-                frame = image[y+padding:y+h-padding, x+padding:x+w-padding]
+                frame_img = image[y+padding:y+h-padding, x+padding:x+w-padding]
                 # 테두리 잔여물 제거
-                frame = clean_frame_border(frame)
+                frame_img = clean_frame_border(frame_img)
+                saved_frames.append(frame_img)
                 
                 # repeat와 box 번호 계산
-                repeat_num = (row // 4) + 1  # 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3
-                box_num = (row % 4) + 1      # 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4
+                repeat_num = (row // 4) + 1
+                box_num = (row % 4) + 1
                 
-                # 파일명 생성 (모든 프레임에 answer 접두사 추가)
+                # 파일명 생성
                 output_path = os.path.join(
                     output_dir, 
                     f"answer{selected_number}_question{question_num}_repeat{repeat_num}_box{box_num}.jpg"
                 )
-                cv2.imwrite(output_path, frame)
+                cv2.imwrite(output_path, frame_img)
                 print(f"저장됨: {output_path} (위치: {col},{row})")
                 extracted_positions.add(position_key)
                 total_frames += 1
+    
+    # 템플릿 이미지가 제공된 경우 템플릿 출력 생성
+    if template_path:
+        create_template_output(image_path, template_path, output_dir)
     
     print(f"\n총 추출된 프레임 수: {total_frames}/84")
     if total_frames < 84:
         print("경고: 일부 프레임이 누락되었습니다.")
     print("\n프레임 추출 완료")
     
-    # A4 캔버스 생성 및 이미지 병합
-    canvas, scale_factor, left_margin, top_margin = create_a4_canvas(
-        image.shape[1], image.shape[0], 
-        avg_width, avg_height, 
-        avg_col_spacing, avg_row_spacing
-    )
-    
-    # 캔버스에 이미지 병합
-    merge_images_on_canvas(
-        image_path, output_dir, canvas, scale_factor, 
-        left_margin, top_margin, frame_grid, 
-        avg_width, avg_height, 
-        avg_col_spacing, avg_row_spacing
-    ) 
