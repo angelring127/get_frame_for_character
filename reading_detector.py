@@ -232,7 +232,7 @@ def clean_frame_border(frame, is_edge=False):
     
     return frame
 
-def create_template_output(image_path, template_path, output_dir):
+def create_template_output(image_path, template_path, output_dir, template_name):
     """
     템플릿 이미지에 프레임을 배치하여 출력합니다.
     5번째 줄 왼쪽부터 선택된 답안의 프레임을 순서대로 배치합니다.
@@ -327,13 +327,14 @@ def create_template_output(image_path, template_path, output_dir):
             print(f"프레임 배치 오류: {e}")
             continue
     
-    # 결과 이미지 저장
-    output_path = os.path.join(output_dir, 'template_output.jpg')
+    # 결과 이미지 저장 (입력받은 템플릿 이름 사용)
+    print(f"\n템플릿 이름으로 저장: {template_name}")  # 디버깅용 출력 추가
+    output_path = os.path.join(output_dir, f"{template_name}.jpg")
     cv2.imwrite(output_path, output)
-    print(f"\n템플릿 출력 이미지 저장됨: {output_path}")
+    print(f"템플릿 출력 이미지 저장됨: {output_path}")
     return output
 
-def reading_detect_and_save_frames(image_path, output_dir, template_path=None):
+def reading_detect_and_save_frames(image_path, output_dir, template_path=None, template_name=None):
     # 출력 디렉토리 생성
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -569,8 +570,9 @@ def reading_detect_and_save_frames(image_path, output_dir, template_path=None):
                 total_frames += 1
     
     # 템플릿 이미지가 제공된 경우 템플릿 출력 생성
-    if template_path:
-        create_template_output(image_path, template_path, output_dir)
+    if template_path and template_name:
+        print(f"\n템플릿 생성 시작: {template_name}")  # 디버깅용 출력 추가
+        create_template_output(image_path, template_path, output_dir, template_name)
     
     print(f"\n총 추출된 프레임 수: {total_frames}/84")
     if total_frames < 84:
