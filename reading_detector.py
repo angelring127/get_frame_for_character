@@ -13,7 +13,7 @@ def detect_checkboxes(image, avg_width, output_dir):
 
     height = image.shape[0]
     width = image.shape[1]
-    right_area = image[:, int(width*0.82):]  # 오른쪽 18% 영역만 처리
+    right_area = image[:, int(width*0.75):]  # 오른쪽 25% 영역만 처리
     
     # 체크란 크기 범위 설정 (답안 프레임의 50% 기준, ±15% 허용)
     checkbox_size = avg_width * 0.5
@@ -72,7 +72,7 @@ def detect_checkboxes(image, avg_width, output_dir):
                 print(f"체크란 후보 {i}: 크기 {w}x{h}, 비율 {aspect_ratio:.2f}, 흰색 비율 {white_ratio:.3f}")
                 
                 checkboxes.append({
-                    'position': (x + int(width*0.82), y),  # 전체 이미지 기준 좌표로 변환 (0.82로 수정)
+                    'position': (x + int(width*0.75), y),  # 전체 이미지 기준 좌표로 변환 (0.75로 수정)
                     'size': (w, h),
                     'white_ratio': white_ratio,
                     'is_checked': False,
