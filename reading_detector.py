@@ -6,6 +6,11 @@ def detect_checkboxes(image, avg_width, output_dir):
     """
     이미지에서 체크란을 감지하고 선택된 문제 번호를 반환합니다.
     """
+    # 출력 디렉토리가 없으면 생성
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        print(f"디버그 이미지 저장 디렉토리 생성: {output_dir}")
+
     height = image.shape[0]
     width = image.shape[1]
     right_area = image[:, int(width*0.82):]  # 오른쪽 18% 영역만 처리
@@ -27,7 +32,9 @@ def detect_checkboxes(image, avg_width, output_dir):
     black_mask = cv2.morphologyEx(black_mask, cv2.MORPH_OPEN, kernel)
     
     # 디버깅을 위해 black_mask 저장
-    cv2.imwrite(os.path.join(output_dir, 'debug_black_mask.jpg'), black_mask)
+    debug_black_mask_path = os.path.join(output_dir, 'debug_black_mask.jpg')
+    cv2.imwrite(debug_black_mask_path, black_mask)
+    print(f"디버그 이미지 저장됨: {debug_black_mask_path}")
     
     # 체크란 윤곽선 찾기
     checkbox_contours, _ = cv2.findContours(black_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -139,7 +146,9 @@ def detect_checkboxes(image, avg_width, output_dir):
     print("=====================\n")
     
     # 디버깅을 위해 처리된 이미지 저장
-    cv2.imwrite(os.path.join(output_dir, 'debug_checkboxes.jpg'), image)
+    debug_checkboxes_path = os.path.join(output_dir, 'debug_checkboxes.jpg')
+    cv2.imwrite(debug_checkboxes_path, image)
+    print(f"디버그 이미지 저장됨: {debug_checkboxes_path}")
     
     return selected_question, checkboxes
 
@@ -232,7 +241,7 @@ def clean_frame_border(frame, is_edge=False):
     
     return frame
 
-def create_template_output(image_path, template_path, output_dir, template_name):
+def create_template_output(template_path, output_dir, template_name):
     """
     템플릿 이미지에 프레임을 배치하여 출력합니다.
     각 문제의 84개 이미지를 해당 문제의 시작 위치부터 순차적으로 배치합니다.
@@ -489,7 +498,10 @@ def detect_and_crop_paper(image):
     
     return result
 
-def reading_detect_and_save_frames(image_path, output_dir, template_path=None, template_name=None):
+def reading_detect_and_save_frames(image, output_dir, template_path=None, template_name=None):
+    """
+    전처리된 이미지에서 프레임을 감지하고 저장합니다.
+    """
     # 출력 디렉토리 생성
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -498,50 +510,64 @@ def reading_detect_and_save_frames(image_path, output_dir, template_path=None, t
     if not os.path.exists("output"):
         os.makedirs("output")
     
-    # 이미지 로드 및 전처리
-    image = cv2.imread(image_path)
-    if image is None:
-        raise ValueError(f"이미지를 불러올 수 없습니다: {image_path}")
-    
-    # 종이 영역 감지 및 자르기
-    image = detect_and_crop_paper(image)
-    
-    # 디버깅을 위해 전처리된 이미지 저장
-    cv2.imwrite(os.path.join(output_dir, 'debug_cropped_paper.jpg'), image)
-    
-    # 이미지 전처리 강화
+    # 이미지 전처리
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     
-    # 노이즈 제거를 위한 블러 적용
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    
     # 적응형 이진화 적용
-    thresh = cv2.adaptiveThreshold(
-        blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-        cv2.THRESH_BINARY_INV, 11, 2
+    binary = cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV, 21, 5
     )
     
-    # 모폴로지 연산으로 노이즈 제거 및 윤곽선 강화
-    kernel = np.ones((3,3), np.uint8)
-    thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+    # 수직선과 수평선 감지를 위한 구조화 요소
+    vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 25))
+    horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 1))
     
-    # 디버깅을 위해 전처리된 이미지 저장
-    cv2.imwrite(os.path.join(output_dir, 'debug_preprocessed.jpg'), thresh)
+    # 수직선 감지
+    vertical_lines = cv2.erode(binary, vertical_kernel)
+    vertical_lines = cv2.dilate(vertical_lines, vertical_kernel)
     
-    # 모든 윤곽선 찾기 (RETR_EXTERNAL 대신 RETR_LIST 사용)
-    contours, _ = cv2.findContours(
-        thresh, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE
+    # 수평선 감지
+    horizontal_lines = cv2.erode(binary, horizontal_kernel)
+    horizontal_lines = cv2.dilate(horizontal_lines, horizontal_kernel)
+    
+    # 격자 구조 결합
+    grid = cv2.addWeighted(vertical_lines, 0.5, horizontal_lines, 0.5, 0.0)
+    grid = cv2.dilate(grid, np.ones((3,3), np.uint8), iterations=1)
+    
+    # 디버깅을 위해 전처리된 이미지들 저장
+    cv2.imwrite(os.path.join(output_dir, 'debug_binary.jpg'), binary)
+    cv2.imwrite(os.path.join(output_dir, 'debug_vertical.jpg'), vertical_lines)
+    cv2.imwrite(os.path.join(output_dir, 'debug_horizontal.jpg'), horizontal_lines)
+    cv2.imwrite(os.path.join(output_dir, 'debug_grid.jpg'), grid)
+    
+    # 윤곽선 찾기
+    contours, hierarchy = cv2.findContours(
+        grid, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE
     )
     
     # 답안 프레임 필터링 및 저장
     all_frames = []
+    min_area = image.shape[0] * image.shape[1] * 0.001  # 최소 영역 크기
+    max_area = image.shape[0] * image.shape[1] * 0.02   # 최대 영역 크기
+    
     for cnt in contours:
-        x, y, w, h = cv2.boundingRect(cnt)
-        # 프레임 크기 조건 완화
-        if 0.7 < w/h < 1.3 and w > 20:  # 정사각형 비율 범위 확대, 최소 크기 감소
-            all_frames.append((x, y, w, h))
+        area = cv2.contourArea(cnt)
+        if min_area < area < max_area:
+            x, y, w, h = cv2.boundingRect(cnt)
+            aspect_ratio = w/h if h != 0 else 0
+            
+            # 정사각형에 가까운 프레임만 선택
+            if 0.8 < aspect_ratio < 1.2:
+                all_frames.append((x, y, w, h))
     
     print(f"\n감지된 모든 프레임 수: {len(all_frames)}")
+    
+    # 디버깅을 위해 감지된 프레임 시각화
+    debug_frame = image.copy()
+    for x, y, w, h in all_frames:
+        cv2.rectangle(debug_frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
+    cv2.imwrite(os.path.join(output_dir, 'debug_frames.jpg'), debug_frame)
     
     # 평균 프레임 크기 계산 (이상치 제거)
     frame_sizes = [(w, h) for _, _, w, h in all_frames]
@@ -744,7 +770,7 @@ def reading_detect_and_save_frames(image_path, output_dir, template_path=None, t
             print(f"템플릿 파일을 output 디렉토리에서 찾았습니다: {output_template_path}")
             template_path = output_template_path
             
-        create_template_output(image_path, template_path, output_dir, template_name)
+        create_template_output(template_path, output_dir, template_name)
     
     print(f"\n총 추출된 프레임 수: {total_frames}/84")
     if total_frames < 84:

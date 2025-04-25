@@ -190,15 +190,19 @@ def create_template_output(image_path, template_path, output_dir, template_name)
     print(f"템플릿 출력 이미지 저장됨: {output_path}")
     return output
 
-def writing_detect_and_save_frames(image_path, output_dir, template_path=None, template_name=None):
+def writing_detect_and_save_frames(image, output_dir, template_path=None, template_name=None):
+    """
+    전처리된 이미지에서 프레임을 감지하고 저장합니다.
+    
+    Args:
+        image: 전처리된 이미지 (numpy.ndarray)
+        output_dir: 출력 디렉토리 경로
+        template_path: 템플릿 이미지 경로 (선택사항)
+        template_name: 템플릿 이름 (선택사항)
+    """
     # 출력 디렉토리 생성
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-    
-    # 이미지 로드 및 전처리
-    image = cv2.imread(image_path)
-    if image is None:
-        raise ValueError(f"이미지를 불러올 수 없습니다: {image_path}")
     
     # 이미지 전처리
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
