@@ -206,32 +206,100 @@ def writing_detect_and_save_frames(image, output_dir, template_path=None, templa
     
     # 이미지 전처리
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY_INV)
     
-    # 모든 윤곽선 찾기
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # 적응형 이진화 적용
+    binary = cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV, 21, 5
+    )
     
-    # 프레임 크기 분석
-    frame_sizes = []
+    # 수직선과 수평선 감지를 위한 구조화 요소
+    vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 25))
+    horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 1))
+    
+    # 수직선 감지
+    vertical_lines = cv2.erode(binary, vertical_kernel)
+    vertical_lines = cv2.dilate(vertical_lines, vertical_kernel)
+    
+    # 수평선 감지
+    horizontal_lines = cv2.erode(binary, horizontal_kernel)
+    horizontal_lines = cv2.dilate(horizontal_lines, horizontal_kernel)
+    
+    # 격자 구조 결합
+    grid = cv2.addWeighted(vertical_lines, 0.5, horizontal_lines, 0.5, 0.0)
+    grid = cv2.dilate(grid, np.ones((3,3), np.uint8), iterations=1)
+    
+    # 디버깅을 위해 전처리된 이미지들 저장
+    cv2.imwrite(os.path.join(output_dir, 'debug_binary.jpg'), binary)
+    cv2.imwrite(os.path.join(output_dir, 'debug_vertical.jpg'), vertical_lines)
+    cv2.imwrite(os.path.join(output_dir, 'debug_horizontal.jpg'), horizontal_lines)
+    cv2.imwrite(os.path.join(output_dir, 'debug_grid.jpg'), grid)
+    
+    # 윤곽선 찾기
+    contours, hierarchy = cv2.findContours(
+        grid, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE
+    )
+    
+    # 답안 프레임 필터링
+    all_frames = []
+    min_area = image.shape[0] * image.shape[1] * 0.001  # 최소 영역 크기
+    max_area = image.shape[0] * image.shape[1] * 0.02   # 최대 영역 크기
+    
     for cnt in contours:
-        x, y, w, h = cv2.boundingRect(cnt)
-        # 정사각형에 가까운 프레임만 선택
-        if 0.8 < w/h < 1.2 and w > 30:
-            frame_sizes.append((w, h))
+        area = cv2.contourArea(cnt)
+        if min_area < area < max_area:
+            x, y, w, h = cv2.boundingRect(cnt)
+            aspect_ratio = w/h if h != 0 else 0
+            
+            # 정사각형에 가까운 프레임만 선택
+            if 0.8 < aspect_ratio < 1.2:
+                all_frames.append((x, y, w, h))
     
-    # 답안 프레임 크기 분석 (중간값 사용)
+    print(f"\n감지된 모든 프레임 수: {len(all_frames)}")
+    
+    # 디버깅을 위해 감지된 프레임 시각화
+    debug_frame = image.copy()
+    for x, y, w, h in all_frames:
+        cv2.rectangle(debug_frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
+    cv2.imwrite(os.path.join(output_dir, 'debug_frames.jpg'), debug_frame)
+    
+    # 평균 프레임 크기 계산 (이상치 제거)
+    frame_sizes = [(w, h) for _, _, w, h in all_frames]
     sizes_array = np.array(frame_sizes)
-    median_width = np.median(sizes_array[:, 0])
-    median_height = np.median(sizes_array[:, 1])
     
-    # 체크란 크기 범위 설정 (답안 프레임의 50% 기준, ±10% 허용)
-    checkbox_size = median_width * 0.5
-    checkbox_range = (int(checkbox_size * 0.9), int(checkbox_size * 1.1))
+    # IQR 방식으로 이상치 제거
+    q1_width = np.percentile(sizes_array[:, 0], 25)
+    q3_width = np.percentile(sizes_array[:, 0], 75)
+    iqr_width = q3_width - q1_width
+    lower_bound_width = q1_width - 1.5 * iqr_width
+    upper_bound_width = q3_width + 1.5 * iqr_width
+    
+    q1_height = np.percentile(sizes_array[:, 1], 25)
+    q3_height = np.percentile(sizes_array[:, 1], 75)
+    iqr_height = q3_height - q1_height
+    lower_bound_height = q1_height - 1.5 * iqr_height
+    upper_bound_height = q3_height + 1.5 * iqr_height
+    
+    # 이상치를 제외한 프레임만 선택
+    valid_sizes = sizes_array[
+        (sizes_array[:, 0] >= lower_bound_width) & 
+        (sizes_array[:, 0] <= upper_bound_width) &
+        (sizes_array[:, 1] >= lower_bound_height) & 
+        (sizes_array[:, 1] <= upper_bound_height)
+    ]
+    
+    avg_width = np.median(valid_sizes[:, 0])
+    avg_height = np.median(valid_sizes[:, 1])
     
     print(f"\n=== 프레임 크기 분석 ===")
-    print(f"답안 프레임 크기: {median_width:.0f} x {median_height:.0f}")
-    print(f"체크란 크기 범위: {checkbox_range[0]}~{checkbox_range[1]}")
+    print(f"평균 프레임 크기: {avg_width:.0f} x {avg_height:.0f}")
+    print(f"이상치 제거 전 프레임 수: {len(sizes_array)}")
+    print(f"이상치 제거 후 프레임 수: {len(valid_sizes)}")
     print("=====================\n")
+    
+    # 체크란 크기 범위 설정 (답안 프레임의 50% 기준, ±10% 허용)
+    checkbox_size = avg_width * 0.5
+    checkbox_range = (int(checkbox_size * 0.9), int(checkbox_size * 1.1))
     
     # 체크란 감지
     height = image.shape[0]
@@ -354,18 +422,17 @@ def writing_detect_and_save_frames(image, output_dir, template_path=None, templa
         cv2.imwrite(output_path, checkbox)
         print(f"체크란 저장됨: {output_path}")
     
-    # 답안 프레임 필터링 및 저장
+    # 유효한 프레임 필터링
     valid_frames = []
-    for cnt in contours:
-        x, y, w, h = cv2.boundingRect(cnt)
-        # 답안 프레임 크기 범위 내의 것만 선택
-        if (median_width * 0.9 <= w <= median_width * 1.1 and 
-            median_height * 0.9 <= h <= median_height * 1.1):
+    for x, y, w, h in all_frames:
+        # 프레임 크기 범위 내의 것만 선택
+        if (avg_width * 0.85 <= w <= avg_width * 1.15 and 
+            avg_height * 0.85 <= h <= avg_height * 1.15):
             valid_frames.append((x, y, w, h))
     
     # y 좌표로 행 그룹화
     row_groups = {}
-    y_tolerance = median_height * 0.3  # 같은 행으로 인식할 y좌표 차이
+    y_tolerance = avg_height * 0.3  # 같은 행으로 인식할 y좌표 차이
     
     for frame in valid_frames:
         x, y, w, h = frame
