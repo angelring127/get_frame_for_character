@@ -37,7 +37,7 @@ def clean_frame_border(frame):
     
     return frame
 
-def create_template_output(image_path, template_path, output_dir, template_name):
+def create_template_output(image, template_path, output_dir, template_name):
     """
     템플릿 이미지에 프레임을 배치하여 출력합니다.
     각 문제의 21개 이미지를 해당 문제의 시작 위치부터 순차적으로 배치합니다.
@@ -490,4 +490,4 @@ def writing_detect_and_save_frames(image, output_dir, template_path=None, templa
 
     # 템플릿 출력 함수 호출
     if template_path and template_name:
-        create_template_output(image_path, template_path, output_dir, template_name) 
+        create_template_output(image, template_path, output_dir, template_name) 
