@@ -37,7 +37,160 @@ def clean_frame_border(frame):
     
     return frame
 
-def writing_detect_and_save_frames(image_path, output_dir):
+def create_template_output(image_path, template_path, output_dir, template_name):
+    """
+    템플릿 이미지에 프레임을 배치하여 출력합니다.
+    각 문제의 21개 이미지를 해당 문제의 시작 위치부터 순차적으로 배치합니다.
+    템플릿 이미지는 5000x5000px 크기로 고정됩니다.
+    프레임 크기: 130x130px, 간격: 20px
+    """
+    # 템플릿 이미지 로드
+    template = cv2.imread(template_path)
+    if template is None:
+        # 템플릿 이미지를 찾을 수 없는 경우 output 디렉토리에서 찾기 시도
+        output_template_path = os.path.join("output", os.path.basename(template_path))
+        template = cv2.imread(output_template_path)
+        
+        if template is None:
+            # output 디렉토리에서도 찾을 수 없는 경우 기본 템플릿 사용
+            if os.path.basename(template_path) != "template.png":
+                template = cv2.imread("template.png")
+                if template is None:
+                    raise ValueError(f"템플릿 이미지를 불러올 수 없습니다: {template_path}, {output_template_path}, template.png")
+            else:
+                raise ValueError(f"템플릿 이미지를 불러올 수 없습니다: {template_path}")
+    
+    # 템플릿 크기를 5000x5000으로 고정
+    template = cv2.resize(template, (5000, 5000))
+    output = template.copy()
+    
+    # 템플릿 프레임 설정
+    frame_size = 130
+    rows = 23
+    cols = 22
+    
+    # 시작 위치 계산 (중앙 정렬)
+    start_x = (template.shape[1] - (cols * (frame_size))) // 2
+    start_y = (template.shape[0] - (rows * (frame_size))) // 2
+    
+    # 추출된 이미지 파일 목록 가져오기
+    extracted_files = []
+    for file in os.listdir(output_dir):
+        if file.startswith('frame_question') and file.endswith('.jpg'):
+            # 파일명에서 번호 추출 (frame_question02_1_03 형식)
+            parts = file.replace('.jpg', '').split('_')
+            question = parts[1].replace('question', '')  # question02 -> 02
+            # 두 자리 숫자로 맞추기
+            if len(question) == 1:
+                question = f"0{question}"
+            repeat = int(parts[2])  # 1
+            box = int(parts[3])     # 03
+            extracted_files.append((file, question, repeat, box))
+    
+    # 파일 정렬: question > repeat > box 순서
+    extracted_files.sort(key=lambda x: (x[1], x[2], x[3]))
+    
+    if not extracted_files:
+        raise ValueError("프레임 이미지를 찾을 수 없습니다.")
+    
+    # 각 question 번호별로 파일 그룹화
+    question_files = {}
+    for file_info in extracted_files:
+        question = file_info[1]
+        if question not in question_files:
+            question_files[question] = []
+        question_files[question].append(file_info)
+    
+    # 문제 번호별 시작 위치 계산
+    question_start_positions = {
+        "01": (1, 0),    # 1번 문제: 1번째 줄, 1번째 칸부터
+        "02": (1, 21),   # 2번 문제: 1번째 줄, 22번째 칸부터
+        "03": (2, 20),   # 3번 문제: 2번째 줄, 21번째 칸부터
+        "04": (3, 19),   # 4번 문제: 3번째 줄, 20번째 칸부터
+    }
+    
+    # 각 question 번호별로 프레임 배치 (01부터 04까지 순서대로)
+    for question_num in sorted(question_files.keys()):
+        if question_num not in question_start_positions:
+            print(f"경고: 알 수 없는 문제 번호 {question_num}는 건너뜁니다.")
+            continue
+            
+        files = question_files[question_num]
+        # 시작 위치 설정
+        start_row, start_col = question_start_positions[question_num]
+        print(f"\n문제 {question_num} 프레임 배치 시작 [시작 위치: 행={start_row}, 열={start_col}]")
+        
+        # 프레임 위치 계산 (21개의 프레임을 시작 위치부터 순차적으로)
+        template_frames = []
+        frame_count = 0
+        current_row = start_row
+        current_col = start_col
+        
+        while frame_count < 21 and current_row < rows:
+            x = start_x + current_col * (frame_size)
+            y = start_y + current_row * (frame_size)
+            template_frames.append((x, y, frame_size, frame_size))
+            frame_count += 1
+            
+            # 다음 위치 계산
+            current_col += 1
+            if current_col >= cols:  # 열이 끝나면 다음 행으로
+                current_col = 0
+                current_row += 1
+        
+        # 프레임 배치
+        for i, file_info in enumerate(files):
+            if i >= len(template_frames):
+                break
+                
+            file_name = file_info[0]
+            frame_path = os.path.join(output_dir, file_name)
+            
+            frame = cv2.imread(frame_path)
+            if frame is None:
+                print(f"프레임을 로드할 수 없습니다: {frame_path}")
+                continue
+            
+            # 템플릿의 현재 프레임 위치
+            tx, ty, tw, th = template_frames[i]
+            
+            # 프레임 크기 조정 (비율 유지)
+            target_size = (tw-4, th-4)  # 여백을 위해 약간 작게
+            frame_ratio = frame.shape[1] / frame.shape[0]
+            target_ratio = target_size[0] / target_size[1]
+            
+            if frame_ratio > target_ratio:
+                new_width = target_size[0]
+                new_height = int(new_width / frame_ratio)
+            else:
+                new_height = target_size[1]
+                new_width = int(new_height * frame_ratio)
+            
+            frame = cv2.resize(frame, (new_width, new_height))
+            
+            # 중앙 정렬을 위한 오프셋 계산
+            x_offset = tx + 2 + (tw - new_width) // 2
+            y_offset = ty + 2 + (th - new_height) // 2
+            
+            try:
+                output[y_offset:y_offset+new_height, x_offset:x_offset+new_width] = frame
+                print(f"프레임 배치: {file_name} -> ({x_offset}, {y_offset}) [행:{current_row}, 열:{current_col}]")
+            except ValueError as e:
+                print(f"프레임 배치 오류: {e}")
+                continue
+    
+    # 결과 이미지 저장 (output 디렉토리에 저장)
+    output_path = os.path.join("output", f"{template_name}.jpg")
+    
+    # output 디렉토리가 없으면 생성
+    if not os.path.exists("output"):
+        os.makedirs("output")
+        
+    cv2.imwrite(output_path, output)
+    print(f"템플릿 출력 이미지 저장됨: {output_path}")
+    return output
+
+def writing_detect_and_save_frames(image_path, output_dir, template_path=None, template_name=None):
     # 출력 디렉토리 생성
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -262,4 +415,8 @@ def writing_detect_and_save_frames(image_path, output_dir):
             cv2.imwrite(output_path, frame)
             print(f"저장됨: {output_path}")
     
-    print("\n프레임 추출 완료") 
+    print("\n프레임 추출 완료")
+
+    # 템플릿 출력 함수 호출
+    if template_path and template_name:
+        create_template_output(image_path, template_path, output_dir, template_name) 

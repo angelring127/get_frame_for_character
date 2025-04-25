@@ -261,13 +261,12 @@ def create_template_output(image_path, template_path, output_dir, template_name)
     
     # 템플릿 프레임 설정
     frame_size = 130
-    gap = 20
-    rows = 22
+    rows = 23
     cols = 22
     
     # 시작 위치 계산 (중앙 정렬)
-    start_x = (template.shape[1] - (cols * (frame_size + gap) - gap)) // 2
-    start_y = (template.shape[0] - (rows * (frame_size + gap) - gap)) // 2
+    start_x = (template.shape[1] - (cols * (frame_size))) // 2
+    start_y = (template.shape[0] - (rows * (frame_size))) // 2
     
     # 추출된 이미지 파일 목록 가져오기
     extracted_files = []
@@ -288,8 +287,8 @@ def create_template_output(image_path, template_path, output_dir, template_name)
     question_start_positions = {
         1: (4, 0),    # 1번 문제: 5번째 줄, 1번째 칸부터
         2: (7, 18),   # 2번 문제: 8번째 줄, 19번째 칸부터
-        3: (10, 15),  # 3번 문제: 11번째 줄, 16번째 칸부터
-        4: (13, 12)   # 4번 문제: 14번째 줄, 13번째 칸부터
+        3: (11, 14),  # 3번 문제: 12번째 줄, 15번째 칸부터
+        4: (15, 10)   # 4번 문제: 16번째 줄, 11번째 칸부터
     }
     
     # 선택된 문제 번호에 따른 시작 위치 설정
@@ -303,8 +302,8 @@ def create_template_output(image_path, template_path, output_dir, template_name)
     current_col = start_col
     
     while frame_count < 84 and current_row < rows:
-        x = start_x + current_col * (frame_size + gap)
-        y = start_y + current_row * (frame_size + gap)
+        x = start_x + current_col * (frame_size)
+        y = start_y + current_row * (frame_size)
         template_frames.append((x, y, frame_size, frame_size))
         frame_count += 1
         
@@ -368,6 +367,128 @@ def create_template_output(image_path, template_path, output_dir, template_name)
     print(f"템플릿 출력 이미지 저장됨: {output_path}")
     return output
 
+def detect_and_crop_paper(image):
+    """
+    이미지에서 종이 영역을 감지하고 자릅니다.
+    A4 용지 비율(1:1.4142)을 고려하여 보정합니다.
+    """
+    # 이미지 복사
+    orig = image.copy()
+    
+    # 이미지가 너무 크면 처리를 위해 크기 조정
+    max_dimension = 1500
+    scale = 1.0
+    if max(image.shape[0], image.shape[1]) > max_dimension:
+        scale = max_dimension / max(image.shape[0], image.shape[1])
+        width = int(image.shape[1] * scale)
+        height = int(image.shape[0] * scale)
+        image = cv2.resize(image, (width, height))
+    
+    # 이미지 전처리
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (9, 9), 0)
+    
+    # 이진화 임계값 자동 계산
+    thresh_value, _ = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    _, binary = cv2.threshold(blurred, thresh_value, 255, cv2.THRESH_BINARY)
+    
+    # 모폴로지 연산으로 노이즈 제거 및 경계 강화
+    kernel = np.ones((5, 5), np.uint8)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
+    
+    # 엣지 검출
+    edges = cv2.Canny(binary, 50, 150, apertureSize=3)
+    
+    # 직선 검출
+    lines = cv2.HoughLinesP(edges, 1, np.pi/180, 100, minLineLength=100, maxLineGap=10)
+    
+    if lines is not None:
+        # 검출된 선을 이용하여 경계 강화
+        line_mask = np.zeros_like(edges)
+        for line in lines:
+            x1, y1, x2, y2 = line[0]
+            cv2.line(line_mask, (x1, y1), (x2, y2), 255, 2)
+        edges = cv2.addWeighted(edges, 0.8, line_mask, 0.2, 0)
+    
+    # 윤곽선 찾기
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    if not contours:
+        print("윤곽선을 찾을 수 없습니다. 원본 이미지를 사용합니다.")
+        return orig
+    
+    # 면적이 가장 큰 윤곽선 선택
+    pageContour = max(contours, key=cv2.contourArea)
+    
+    # 윤곽선을 감싸는 최소 사각형 찾기
+    rect = cv2.minAreaRect(pageContour)
+    box = cv2.boxPoints(rect)
+    box = box.astype(np.int32)  # int0 대신 int32 사용
+    
+    # 디버깅을 위한 윤곽선 시각화
+    debug = image.copy()
+    cv2.drawContours(debug, [box], 0, (0, 255, 0), 2)
+    cv2.imwrite('debug_contours.jpg', debug)
+    
+    # 원본 이미지 크기에 맞게 좌표 조정
+    box = box / scale
+    
+    # A4 용지 비율 계산 (1:1.4142)
+    A4_RATIO = 1.4142
+    
+    # 감지된 사각형의 너비와 높이 계산
+    width = np.linalg.norm(box[0] - box[1])
+    height = np.linalg.norm(box[1] - box[2])
+    
+    # A4 비율에 맞게 크기 조정
+    if width / height > A4_RATIO:
+        # 가로 방향
+        newWidth = int(height * A4_RATIO)
+        newHeight = int(height)
+    else:
+        # 세로 방향
+        newWidth = int(width)
+        newHeight = int(width * A4_RATIO)
+    
+    # 좌표 순서 정렬 (좌상단, 우상단, 우하단, 좌하단)
+    rect = np.zeros((4, 2), dtype="float32")
+    s = box.sum(axis=1)
+    rect[0] = box[np.argmin(s)]  # 좌상단
+    rect[2] = box[np.argmax(s)]  # 우하단
+    
+    diff = np.diff(box, axis=1)
+    rect[1] = box[np.argmin(diff)]  # 우상단
+    rect[3] = box[np.argmax(diff)]  # 좌하단
+    
+    # 변환 후 좌표
+    dst = np.array([
+        [0, 0],
+        [newWidth - 1, 0],
+        [newWidth - 1, newHeight - 1],
+        [0, newHeight - 1]
+    ], dtype="float32")
+    
+    # 투시 변환 행렬 계산 및 적용
+    M = cv2.getPerspectiveTransform(rect, dst)
+    warped = cv2.warpPerspective(orig, M, (newWidth, newHeight))
+    
+    # 결과 이미지의 여백 추가
+    border = 20
+    result = cv2.copyMakeBorder(
+        warped,
+        border, border, border, border,
+        cv2.BORDER_CONSTANT,
+        value=[255, 255, 255]
+    )
+    
+    # 최종 이미지 크기가 너무 작으면 원본 반환
+    if result.shape[0] < 500 or result.shape[1] < 500:
+        print("감지된 종이 영역이 너무 작습니다. 원본 이미지를 사용합니다.")
+        return orig
+    
+    return result
+
 def reading_detect_and_save_frames(image_path, output_dir, template_path=None, template_name=None):
     # 출력 디렉토리 생성
     if not os.path.exists(output_dir):
@@ -381,6 +502,12 @@ def reading_detect_and_save_frames(image_path, output_dir, template_path=None, t
     image = cv2.imread(image_path)
     if image is None:
         raise ValueError(f"이미지를 불러올 수 없습니다: {image_path}")
+    
+    # 종이 영역 감지 및 자르기
+    image = detect_and_crop_paper(image)
+    
+    # 디버깅을 위해 전처리된 이미지 저장
+    cv2.imwrite(os.path.join(output_dir, 'debug_cropped_paper.jpg'), image)
     
     # 이미지 전처리 강화
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)

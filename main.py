@@ -43,7 +43,7 @@ def main(image_path: str, flag: int, template_name: str):
     
     # 플래그 값에 따라 적절한 함수 호출
     if flag == 1:
-        writing_detect_and_save_frames(image_path, output_dir)
+        writing_detect_and_save_frames(image_path, output_dir, template_path, template_name)
     elif flag == 2:
         reading_detect_and_save_frames(image_path, output_dir, template_path, template_name)
     else:
