@@ -6,8 +6,20 @@ def clean_frame_border(frame):
     """
     프레임 이미지의 테두리 잔여물을 제거합니다.
     """
+    # 이미지 유효성 검사
+    if frame is None or frame.size == 0:
+        print("경고: 유효하지 않은 이미지가 입력되었습니다.")
+        return None
+    
     # 그레이스케일 변환
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    try:
+        if len(frame.shape) == 3:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = frame.copy()
+    except cv2.error as e:
+        print(f"이미지 변환 중 오류 발생: {e}")
+        return None
     
     # 이진화
     _, binary = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
@@ -59,6 +71,10 @@ def create_template_output(image, template_path, output_dir, template_name):
                     raise ValueError(f"템플릿 이미지를 불러올 수 없습니다: {template_path}, {output_template_path}, template.png")
             else:
                 raise ValueError(f"템플릿 이미지를 불러올 수 없습니다: {template_path}")
+    
+    # 입력 이미지 유효성 검사
+    if image is None or image.size == 0:
+        raise ValueError("입력 이미지가 비어있거나 유효하지 않습니다.")
     
     # 템플릿 크기를 5000x5000으로 고정
     template = cv2.resize(template, (5000, 5000))
@@ -150,6 +166,11 @@ def create_template_output(image, template_path, output_dir, template_name):
                 print(f"프레임을 로드할 수 없습니다: {frame_path}")
                 continue
             
+            # 프레임 유효성 검사
+            if frame.size == 0:
+                print(f"프레임이 비어있습니다: {frame_path}")
+                continue
+                
             # 템플릿의 현재 프레임 위치
             tx, ty, tw, th = template_frames[i]
             
@@ -172,8 +193,13 @@ def create_template_output(image, template_path, output_dir, template_name):
             y_offset = ty + 2 + (th - new_height) // 2
             
             try:
-                output[y_offset:y_offset+new_height, x_offset:x_offset+new_width] = frame
-                print(f"프레임 배치: {file_name} -> ({x_offset}, {y_offset}) [행:{current_row}, 열:{current_col}]")
+                # 출력 이미지 범위 체크
+                if (y_offset >= 0 and y_offset + new_height <= output.shape[0] and
+                    x_offset >= 0 and x_offset + new_width <= output.shape[1]):
+                    output[y_offset:y_offset+new_height, x_offset:x_offset+new_width] = frame
+                    print(f"프레임 배치: {file_name} -> ({x_offset}, {y_offset}) [행:{current_row}, 열:{current_col}]")
+                else:
+                    print(f"프레임 배치 실패: 범위를 벗어남 - {file_name}")
             except ValueError as e:
                 print(f"프레임 배치 오류: {e}")
                 continue
@@ -184,9 +210,17 @@ def create_template_output(image, template_path, output_dir, template_name):
     # output 디렉토리가 없으면 생성
     if not os.path.exists("output"):
         os.makedirs("output")
-        
-    cv2.imwrite(output_path, output)
-    print(f"템플릿 출력 이미지 저장됨: {output_path}")
+    
+    # 결과 이미지 저장 전 유효성 검사
+    if output is not None and output.size > 0:
+        try:
+            cv2.imwrite(output_path, output)
+            print(f"템플릿 출력 이미지 저장됨: {output_path}")
+        except cv2.error as e:
+            print(f"템플릿 출력 이미지 저장 중 오류 발생: {e}")
+    else:
+        print("경고: 출력 이미지가 유효하지 않습니다.")
+    
     return output
 
 def writing_detect_and_save_frames(image, output_dir, template_path=None, template_name=None):
@@ -199,40 +233,96 @@ def writing_detect_and_save_frames(image, output_dir, template_path=None, templa
         template_path: 템플릿 이미지 경로 (선택사항)
         template_name: 템플릿 이름 (선택사항)
     """
+    print("\n=== 이미지 처리 시작 ===")
+    print(f"입력 이미지 shape: {image.shape if image is not None else 'None'}")
+    print(f"입력 이미지 size: {image.size if image is not None else 0}")
+    
+    # 입력 이미지 유효성 검사
+    if image is None or image.size == 0:
+        print("경고: 입력 이미지가 비어있거나 유효하지 않습니다.")
+        return None
+    
     # 출력 디렉토리 생성
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
+        print(f"출력 디렉토리 생성: {output_dir}")
     
     # 이미지 전처리
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    try:
+        if len(image.shape) == 3:
+            print("3차원 이미지를 그레이스케일로 변환합니다.")
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        else:
+            print("2차원 이미지를 복사합니다.")
+            gray = image.copy()
+        
+        print(f"그레이스케일 이미지 shape: {gray.shape}")
+        print(f"그레이스케일 이미지 size: {gray.size}")
+        
+    except cv2.error as e:
+        print(f"이미지 변환 중 오류 발생: {e}")
+        print(f"이미지 shape: {image.shape if image is not None else 'None'}")
+        return None
     
     # 적응형 이진화 적용
-    binary = cv2.adaptiveThreshold(
-        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY_INV, 21, 5
-    )
+    try:
+        binary = cv2.adaptiveThreshold(
+            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV, 21, 5
+        )
+        print(f"이진화 이미지 shape: {binary.shape}")
+        print(f"이진화 이미지 size: {binary.size}")
+    except cv2.error as e:
+        print(f"이진화 중 오류 발생: {e}")
+        return None
     
     # 수직선과 수평선 감지를 위한 구조화 요소
     vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 25))
     horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 1))
     
     # 수직선 감지
-    vertical_lines = cv2.erode(binary, vertical_kernel)
-    vertical_lines = cv2.dilate(vertical_lines, vertical_kernel)
+    try:
+        vertical_lines = cv2.erode(binary, vertical_kernel)
+        vertical_lines = cv2.dilate(vertical_lines, vertical_kernel)
+        print(f"수직선 이미지 shape: {vertical_lines.shape}")
+    except cv2.error as e:
+        print(f"수직선 감지 중 오류 발생: {e}")
+        return None
     
     # 수평선 감지
-    horizontal_lines = cv2.erode(binary, horizontal_kernel)
-    horizontal_lines = cv2.dilate(horizontal_lines, horizontal_kernel)
+    try:
+        horizontal_lines = cv2.erode(binary, horizontal_kernel)
+        horizontal_lines = cv2.dilate(horizontal_lines, horizontal_kernel)
+        print(f"수평선 이미지 shape: {horizontal_lines.shape}")
+    except cv2.error as e:
+        print(f"수평선 감지 중 오류 발생: {e}")
+        return None
     
     # 격자 구조 결합
-    grid = cv2.addWeighted(vertical_lines, 0.5, horizontal_lines, 0.5, 0.0)
-    grid = cv2.dilate(grid, np.ones((3,3), np.uint8), iterations=1)
+    try:
+        grid = cv2.addWeighted(vertical_lines, 0.5, horizontal_lines, 0.5, 0.0)
+        grid = cv2.dilate(grid, np.ones((3,3), np.uint8), iterations=1)
+        print(f"격자 이미지 shape: {grid.shape}")
+    except cv2.error as e:
+        print(f"격자 구조 결합 중 오류 발생: {e}")
+        return None
     
     # 디버깅을 위해 전처리된 이미지들 저장
-    cv2.imwrite(os.path.join(output_dir, 'debug_binary.jpg'), binary)
-    cv2.imwrite(os.path.join(output_dir, 'debug_vertical.jpg'), vertical_lines)
-    cv2.imwrite(os.path.join(output_dir, 'debug_horizontal.jpg'), horizontal_lines)
-    cv2.imwrite(os.path.join(output_dir, 'debug_grid.jpg'), grid)
+    try:
+        if binary is not None and binary.size > 0:
+            cv2.imwrite(os.path.join(output_dir, 'debug_binary.jpg'), binary)
+            print("이진화 이미지 저장 완료")
+        if vertical_lines is not None and vertical_lines.size > 0:
+            cv2.imwrite(os.path.join(output_dir, 'debug_vertical.jpg'), vertical_lines)
+            print("수직선 이미지 저장 완료")
+        if horizontal_lines is not None and horizontal_lines.size > 0:
+            cv2.imwrite(os.path.join(output_dir, 'debug_horizontal.jpg'), horizontal_lines)
+            print("수평선 이미지 저장 완료")
+        if grid is not None and grid.size > 0:
+            cv2.imwrite(os.path.join(output_dir, 'debug_grid.jpg'), grid)
+            print("격자 이미지 저장 완료")
+    except cv2.error as e:
+        print(f"디버그 이미지 저장 중 오류 발생: {e}")
     
     # 원본 이미지 로드 (debug_resized.jpg)
     original_image = cv2.imread(os.path.join(output_dir, 'debug_resized.jpg'))
@@ -265,10 +355,20 @@ def writing_detect_and_save_frames(image, output_dir, template_path=None, templa
     debug_frame = image.copy()
     for x, y, w, h in all_frames:
         cv2.rectangle(debug_frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
-    cv2.imwrite(os.path.join(output_dir, 'debug_frames.jpg'), debug_frame)
+    
+    # 디버그 이미지 저장 전 유효성 검사
+    if debug_frame is not None and debug_frame.size > 0:
+        try:
+            cv2.imwrite(os.path.join(output_dir, 'debug_frames.jpg'), debug_frame)
+        except cv2.error as e:
+            print(f"디버그 프레임 이미지 저장 중 오류 발생: {e}")
     
     # 평균 프레임 크기 계산 (이상치 제거)
     frame_sizes = [(w, h) for _, _, w, h in all_frames]
+    if not frame_sizes:  # 프레임이 하나도 없는 경우
+        print("경고: 감지된 프레임이 없습니다.")
+        return None
+        
     sizes_array = np.array(frame_sizes)
     
     # IQR 방식으로 이상치 제거
@@ -419,12 +519,33 @@ def writing_detect_and_save_frames(image, output_dir, template_path=None, templa
         x, y = box['position']
         w, h = box['size']
         padding = 2
-        checkbox = image[y-padding:y+h+padding, x-padding:x+w+padding]
-        # 테두리 잔여물 제거
-        checkbox = clean_frame_border(checkbox)
-        output_path = os.path.join(output_dir, f"checkbox_{i}.jpg")
-        cv2.imwrite(output_path, checkbox)
-        print(f"체크란 저장됨: {output_path}")
+        
+        try:
+            # 체크란 영역이 이미지 범위를 벗어나지 않는지 확인
+            if (y-padding >= 0 and y+h+padding <= image.shape[0] and 
+                x-padding >= 0 and x+w+padding <= image.shape[1]):
+                
+                # 체크란 영역 추출
+                checkbox = image[y-padding:y+h+padding, x-padding:x+w+padding]
+                
+                # 추출된 영역이 유효한지 확인
+                if checkbox is not None and checkbox.size > 0:
+                    # 테두리 잔여물 제거
+                    cleaned_checkbox = clean_frame_border(checkbox)
+                    
+                    if cleaned_checkbox is not None and cleaned_checkbox.size > 0:
+                        output_path = os.path.join(output_dir, f"checkbox_{i}.jpg")
+                        cv2.imwrite(output_path, cleaned_checkbox)
+                        print(f"체크란 저장됨: {output_path}")
+                    else:
+                        print(f"경고: 체크란 {i} 정리 후 이미지가 유효하지 않습니다.")
+                else:
+                    print(f"경고: 체크란 {i} 영역이 유효하지 않습니다.")
+            else:
+                print(f"경고: 체크란 {i} 위치가 이미지 범위를 벗어났습니다.")
+        except Exception as e:
+            print(f"체크란 {i} 저장 중 오류 발생: {e}")
+            continue
     
     # 유효한 프레임 필터링
     valid_frames = []
