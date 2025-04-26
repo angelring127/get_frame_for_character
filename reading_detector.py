@@ -280,7 +280,7 @@ def create_template_output(template_path, output_dir, template_name):
     # 추출된 이미지 파일 목록 가져오기
     extracted_files = []
     for file in os.listdir(output_dir):
-        if file.startswith('answer') and file.endswith('.jpg') and 'checkbox' not in file:
+        if file.startswith('answer') and file.endswith('.jpg') and 'checkbox' not in file and '_origin' not in file:
             # 파일명에서 번호 추출
             parts = file.replace('.jpg', '').split('_')
             answer = int(parts[0].replace('answer', ''))
@@ -541,6 +541,11 @@ def reading_detect_and_save_frames(image, output_dir, template_path=None, templa
     cv2.imwrite(os.path.join(output_dir, 'debug_horizontal.jpg'), horizontal_lines)
     cv2.imwrite(os.path.join(output_dir, 'debug_grid.jpg'), grid)
     
+    # 원본 이미지 로드 (debug_resized.jpg)
+    original_image = cv2.imread(os.path.join(output_dir, 'debug_resized.jpg'))
+    if original_image is None:
+        print("경고: debug_resized.jpg를 찾을 수 없습니다. 원본 프레임 추출을 건너뜁니다.")
+    
     # 윤곽선 찾기
     contours, hierarchy = cv2.findContours(
         grid, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE
@@ -751,12 +756,19 @@ def reading_detect_and_save_frames(image, output_dir, template_path=None, templa
                 box_num = (row % 4) + 1
                 
                 # 파일명 생성
-                output_path = os.path.join(
-                    output_dir, 
-                    f"answer{selected_number}_question{question_num}_repeat{repeat_num}_box{box_num}.jpg"
-                )
+                base_name = f"answer{selected_number}_question{question_num}_repeat{repeat_num}_box{box_num}"
+                output_path = os.path.join(output_dir, f"{base_name}.jpg")
                 cv2.imwrite(output_path, frame_img)
                 print(f"저장됨: {output_path} (위치: {col},{row})")
+                
+                # 원본 이미지에서도 같은 위치의 프레임 추출
+                if original_image is not None:
+                    original_frame = original_image[y+padding:y+h-padding, x+padding:x+w-padding]
+                    original_frame = clean_frame_border(original_frame)
+                    original_path = os.path.join(output_dir, f"{base_name}_origin.jpg")
+                    cv2.imwrite(original_path, original_frame)
+                    print(f"원본 프레임 저장됨: {original_path}")
+                
                 extracted_positions.add(position_key)
                 total_frames += 1
     

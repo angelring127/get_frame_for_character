@@ -76,7 +76,7 @@ def create_template_output(image, template_path, output_dir, template_name):
     # 추출된 이미지 파일 목록 가져오기
     extracted_files = []
     for file in os.listdir(output_dir):
-        if file.startswith('frame_question') and file.endswith('.jpg'):
+        if file.startswith('frame_question') and file.endswith('.jpg') and '_origin' not in file:
             # 파일명에서 번호 추출 (frame_question02_1_03 형식)
             parts = file.replace('.jpg', '').split('_')
             question = parts[1].replace('question', '')  # question02 -> 02
@@ -86,7 +86,6 @@ def create_template_output(image, template_path, output_dir, template_name):
             repeat = int(parts[2])  # 1
             box = int(parts[3])     # 03
             extracted_files.append((file, question, repeat, box))
-    
     # 파일 정렬: question > repeat > box 순서
     extracted_files.sort(key=lambda x: (x[1], x[2], x[3]))
     
@@ -234,6 +233,11 @@ def writing_detect_and_save_frames(image, output_dir, template_path=None, templa
     cv2.imwrite(os.path.join(output_dir, 'debug_vertical.jpg'), vertical_lines)
     cv2.imwrite(os.path.join(output_dir, 'debug_horizontal.jpg'), horizontal_lines)
     cv2.imwrite(os.path.join(output_dir, 'debug_grid.jpg'), grid)
+    
+    # 원본 이미지 로드 (debug_resized.jpg)
+    original_image = cv2.imread(os.path.join(output_dir, 'debug_resized.jpg'))
+    if original_image is None:
+        print("경고: debug_resized.jpg를 찾을 수 없습니다. 원본 프레임 추출을 건너뜁니다.")
     
     # 윤곽선 찾기
     contours, hierarchy = cv2.findContours(
@@ -458,6 +462,12 @@ def writing_detect_and_save_frames(image, output_dir, template_path=None, templa
     
     # 7행만 선택하고 각 행의 프레임을 왼쪽/오른쪽으로 분류
     sorted_rows = sorted_rows[:7]
+    
+    # 원본 이미지 로드 (debug_resized.jpg)
+    original_image = cv2.imread(os.path.join(output_dir, 'debug_resized.jpg'))
+    if original_image is None:
+        print("경고: debug_resized.jpg를 찾을 수 없습니다. 원본 프레임 추출을 건너뜁니다.")
+    
     for row_idx, row in enumerate(sorted_rows, 1):
         left_frames = [f for f in row if f[0] < mid_x]
         right_frames = [f for f in row if f[0] >= mid_x]
@@ -466,25 +476,55 @@ def writing_detect_and_save_frames(image, output_dir, template_path=None, templa
         for col_idx, (x, y, w, h) in enumerate(sorted(left_frames, key=lambda f: f[0]), 1):
             if col_idx > 3: continue
             padding = 5
+            
+            # 전처리된 이미지에서 프레임 추출
             frame = image[y+padding:y+h-padding, x+padding:x+w-padding]
-            # 테두리 잔여물 제거
             frame = clean_frame_border(frame)
+            frame_height, frame_width = frame.shape[:2]  # 전처리된 프레임의 크기 저장
+            
             repeat_suffix = {1: "03", 2: "02", 3: "01"}[col_idx]  # 역순으로 변경
-            output_path = os.path.join(output_dir, f"frame_{selected_q2}_{row_idx}_{repeat_suffix}.jpg")
+            base_name = f"frame_{selected_q2}_{row_idx}_{repeat_suffix}"
+            output_path = os.path.join(output_dir, f"{base_name}.jpg")
             cv2.imwrite(output_path, frame)
             print(f"저장됨: {output_path}")
+            
+            # 원본 이미지에서 동일한 위치의 프레임 추출
+            if original_image is not None:
+                # 전처리된 이미지와 동일한 위치와 크기로 추출
+                original_frame = original_image[y+padding:y+h-padding, x+padding:x+w-padding]
+                # 전처리된 프레임과 동일한 크기로 리사이즈
+                if original_frame.shape[:2] != (frame_height, frame_width):
+                    original_frame = cv2.resize(original_frame, (frame_width, frame_height))
+                original_path = os.path.join(output_dir, f"{base_name}_origin.jpg")
+                cv2.imwrite(original_path, original_frame)
+                print(f"원본 프레임 저장됨: {original_path}")
         
         # 오른쪽 프레임 처리 (문제1)
         for col_idx, (x, y, w, h) in enumerate(sorted(right_frames, key=lambda f: f[0]), 1):
             if col_idx > 3: continue
             padding = 5
+            
+            # 전처리된 이미지에서 프레임 추출
             frame = image[y+padding:y+h-padding, x+padding:x+w-padding]
-            # 테두리 잔여물 제거
             frame = clean_frame_border(frame)
+            frame_height, frame_width = frame.shape[:2]  # 전처리된 프레임의 크기 저장
+            
             repeat_suffix = {1: "03", 2: "02", 3: "01"}[col_idx]  # 역순으로 변경
-            output_path = os.path.join(output_dir, f"frame_{selected_q1}_{row_idx}_{repeat_suffix}.jpg")
+            base_name = f"frame_{selected_q1}_{row_idx}_{repeat_suffix}"
+            output_path = os.path.join(output_dir, f"{base_name}.jpg")
             cv2.imwrite(output_path, frame)
             print(f"저장됨: {output_path}")
+            
+            # 원본 이미지에서 동일한 위치의 프레임 추출
+            if original_image is not None:
+                # 전처리된 이미지와 동일한 위치와 크기로 추출
+                original_frame = original_image[y+padding:y+h-padding, x+padding:x+w-padding]
+                # 전처리된 프레임과 동일한 크기로 리사이즈
+                if original_frame.shape[:2] != (frame_height, frame_width):
+                    original_frame = cv2.resize(original_frame, (frame_width, frame_height))
+                original_path = os.path.join(output_dir, f"{base_name}_origin.jpg")
+                cv2.imwrite(original_path, original_frame)
+                print(f"원본 프레임 저장됨: {original_path}")
     
     print("\n프레임 추출 완료")
 
