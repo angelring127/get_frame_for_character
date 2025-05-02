@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import os
+from sklearn.cluster import KMeans
 
 def detect_checkboxes(image, avg_width, output_dir):
     """
@@ -295,7 +296,7 @@ def create_template_output(template_path, output_dir, template_name):
     # 문제 번호별 시작 위치 계산
     question_start_positions = {
         1: (5, 0),    # 1번 문제: 5번째 줄, 1번째 칸부터
-        2: (8, 36),   # 2번 문제: 8번째 줄, 19번째 칸부터
+        2: (8, 32),   # 2번 문제: 8번째 줄, 19번째 칸부터
         3: (12, 28),  # 3번 문제: 12번째 줄, 15번째 칸부터
         4: (16, 20)   # 4번 문제: 16번째 줄, 11번째 칸부터
     }
@@ -572,7 +573,10 @@ def reading_detect_and_save_frames(image, output_dir, template_path=None, templa
     debug_frame = image.copy()
     for x, y, w, h in all_frames:
         cv2.rectangle(debug_frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
-    cv2.imwrite(os.path.join(output_dir, 'debug_frames.jpg'), debug_frame)
+        # 프레임 좌표와 크기 표시
+        cv2.putText(debug_frame, f"({x},{y})", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+        cv2.putText(debug_frame, f"{w}x{h}", (x, y+h+20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+    cv2.imwrite(os.path.join(output_dir, 'debug_all_frames.jpg'), debug_frame)
     
     # 평균 프레임 크기 계산 (이상치 제거)
     frame_sizes = [(w, h) for _, _, w, h in all_frames]
@@ -638,139 +642,163 @@ def reading_detect_and_save_frames(image, output_dir, template_path=None, templa
             valid_frames.append((x, y, w, h))
     
     print(f"유효한 프레임 수: {len(valid_frames)}")
-    
-    # x, y 좌표 분석
-    x_coords = sorted([f[0] for f in valid_frames])
-    y_coords = sorted([f[1] for f in valid_frames])
-    
-    # 열 간격 계산 (x 좌표 차이의 중간값)
-    x_diffs = []
-    for i in range(len(x_coords)-1):
-        diff = x_coords[i+1] - x_coords[i]
-        if diff > avg_width * 0.5:  # 최소 간격 설정
-            x_diffs.append(diff)
-    avg_col_spacing = np.median(x_diffs) if x_diffs else avg_width * 1.2
-    
-    # 행 간격 계산 (y 좌표 차이의 중간값)
-    y_diffs = []
-    for i in range(len(y_coords)-1):
-        diff = y_coords[i+1] - y_coords[i]
-        if diff > avg_height * 0.5:  # 최소 간격 설정
-            y_diffs.append(diff)
-    avg_row_spacing = np.median(y_diffs) if y_diffs else avg_height * 1.2
-    
-    print(f"\n=== 프레임 간격 분석 ===")
-    print(f"평균 열 간격: {avg_col_spacing:.1f}픽셀")
-    print(f"평균 행 간격: {avg_row_spacing:.1f}픽셀")
-    print("=====================\n")
-    
-    # 12x7 크기의 2차원 배열 초기화
-    frame_grid = [[None for _ in range(7)] for _ in range(12)]
-    
-    # 각 프레임의 위치를 행과 열 인덱스로 변환
-    for x, y, w, h in valid_frames:
-        # 열 인덱스 계산 (왼쪽에서 오른쪽으로)
-        if avg_col_spacing > 0:
-            col_idx = round((x - x_coords[0]) / avg_col_spacing)
-            col_idx = max(0, min(6, col_idx))  # 0-6 범위로 제한
-            
-            # 행 인덱스 계산 (위에서 아래로)
-            if avg_row_spacing > 0:
-                row_idx = round((y - y_coords[0]) / avg_row_spacing)
-                row_idx = max(0, min(11, row_idx))  # 0-11 범위로 제한
-                
-                frame_grid[row_idx][col_idx] = (x, y, w, h)
-    
-    # 각 행의 프레임 수 확인 및 출력
-    print("\n=== 행별 프레임 수 ===")
-    for i, row in enumerate(frame_grid):
-        valid_count = sum(1 for f in row if f is not None)
-        print(f"행 {i}: {valid_count}개 프레임")
-    print("=====================\n")
-    
-    # 추출된 프레임 위치 저장을 위한 집합
+
+    # === K-means로 y좌표 클러스터링하여 행 그룹핑 ===
+    y_values = np.array([[y + h//2] for _, y, _, h in valid_frames])
+    n_rows = 12
+    if len(valid_frames) >= n_rows:
+        kmeans = KMeans(n_clusters=n_rows, random_state=0).fit(y_values)
+        row_labels = kmeans.labels_
+        row_centers = kmeans.cluster_centers_.flatten()
+        # 각 행 그룹의 y중앙값 기준으로 정렬
+        sorted_row_indices = np.argsort(row_centers)
+        row_map = {orig_idx: new_idx for new_idx, orig_idx in enumerate(sorted_row_indices)}
+    else:
+        row_labels = np.zeros(len(valid_frames), dtype=int)
+        row_map = {0:0}
+
+    # === K-means로 x좌표 클러스터링하여 열 그룹핑 ===
+    x_values = np.array([[x + w//2] for x, y, w, h in valid_frames])
+    n_cols = 7
+    if len(valid_frames) >= n_cols:
+        kmeans_x = KMeans(n_clusters=n_cols, random_state=0).fit(x_values)
+        col_labels = kmeans_x.labels_
+        col_centers = kmeans_x.cluster_centers_.flatten()
+        sorted_col_indices = np.argsort(col_centers)
+        col_map = {orig_idx: new_idx for new_idx, orig_idx in enumerate(sorted_col_indices)}
+    else:
+        col_labels = np.zeros(len(valid_frames), dtype=int)
+        col_map = {0:0}
+
+    # 12x7 그리드 초기화 (K-means 기반)
+    frame_grid = [[None for _ in range(n_cols)] for _ in range(n_rows)]
+    for idx, (x, y, w, h) in enumerate(valid_frames):
+        row_idx = row_map[row_labels[idx]]
+        col_idx = col_map[col_labels[idx]]
+        frame_grid[row_idx][col_idx] = (x, y, w, h)
+
+    # === 기존 프레임 저장 및 중복 방지, 파일명 생성, 원본 이미지 저장 루프 복원 ===
     extracted_positions = set()
-    
-    # 프레임 저장을 위한 리스트
     saved_frames = []
-    
-    # 각 question(1-7)에 대한 행-열 매핑 처리
     total_frames = 0
-    for col in range(7):  # 7개 열 (0-6)
+    for col in range(n_cols):  # 7개 열 (0-6)
         question_num = 7 - col  # 7부터 1까지 역순
-        
-        for row in range(12):  # 12개 행 (0-11)
+        for row in range(n_rows):  # 12개 행 (0-11)
             frame = frame_grid[row][col]
             if frame is None:
-                # 누락된 프레임의 예상 위치 계산
-                if row > 0 and frame_grid[row-1][col] is not None:
-                    prev_x, prev_y, prev_w, prev_h = frame_grid[row-1][col]
-                    expected_x = prev_x
-                    expected_y = prev_y + avg_row_spacing
-                    
-                    # 예상 위치 주변에서 프레임 검색
-                    search_area = image[
-                        max(0, int(expected_y - avg_row_spacing/2)):min(image.shape[0], int(expected_y + avg_row_spacing/2)),
-                        max(0, int(expected_x - prev_w)):min(image.shape[1], int(expected_x + prev_w))
-                    ]
-                    
-                    if search_area.size > 0:
-                        # 검색 영역에서 프레임 크기의 윤곽선 찾기
-                        gray_search = cv2.cvtColor(search_area, cv2.COLOR_BGR2GRAY)
-                        _, thresh_search = cv2.threshold(gray_search, 150, 255, cv2.THRESH_BINARY_INV)
-                        search_contours, _ = cv2.findContours(thresh_search, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                        
-                        for cnt in search_contours:
-                            sx, sy, sw, sh = cv2.boundingRect(cnt)
-                            if (valid_width_range[0] <= sw <= valid_width_range[1] and 
-                                valid_height_range[0] <= sh <= valid_height_range[1]):
-                                # 프레임 찾음
-                                frame = search_area[sy:sy+sh, sx:sx+sw]
-                                # 테두리 잔여물 제거
-                                frame = clean_frame_border(frame)
-                                
-                                # 파일명 생성 (모든 프레임에 answer 접두사 추가)
-                                output_path = os.path.join(
-                                    output_dir, 
-                                    f"answer{selected_number}_question{question_num}_repeat{(row//4)+1}_box{(row%4)+1}.jpg"
-                                )
-                                cv2.imwrite(output_path, frame)
-                                print(f"추가 저장됨: {output_path} (위치: {col},{row})")
-                                total_frames += 1
-                    else:
-                        print(f"경고: question{question_num}_repeat{(row//4)+1}_box{(row%4)+1} 누락됨 (위치: {col},{row})")
                 continue
-                
             x, y, w, h = frame
-            # 중복 방지를 위한 위치 체크
             position_key = (x, y)
             if position_key not in extracted_positions:
                 padding = 5
                 frame_img = image[y+padding:y+h-padding, x+padding:x+w-padding]
-                # 테두리 잔여물 제거
                 frame_img = clean_frame_border(frame_img)
                 saved_frames.append(frame_img)
-                
-                # repeat와 box 번호 계산
                 repeat_num = (row // 4) + 1
                 box_num = (row % 4) + 1
-                
-                # 파일명 생성
                 base_name = f"answer{selected_number}_question{question_num}_repeat{repeat_num}_box{box_num}"
                 output_path = os.path.join(output_dir, f"{base_name}.jpg")
                 cv2.imwrite(output_path, frame_img)
                 print(f"저장됨: {output_path} (위치: {col},{row})")
-                
-                # 원본 이미지에서도 같은 위치의 프레임 추출
                 if original_image is not None:
                     original_frame = original_image[y+padding:y+h-padding, x+padding:x+w-padding]
                     original_frame = clean_frame_border(original_frame)
                     original_path = os.path.join(output_dir, f"{base_name}_origin.jpg")
                     cv2.imwrite(original_path, original_frame)
                     print(f"원본 프레임 저장됨: {original_path}")
-                
                 extracted_positions.add(position_key)
                 total_frames += 1
+
+    # === 누락된 프레임 보정(추가 탐색) 루프 복원 ===
+    for col in range(n_cols):
+        question_num = 7 - col
+        for row in range(n_rows):
+            frame = frame_grid[row][col]
+            if frame is not None:
+                continue
+            # 누락된 프레임의 예상 위치 계산
+            # 바로 위 행에 프레임이 있으면 그 위치를 기준으로 탐색
+            if row > 0 and frame_grid[row-1][col] is not None:
+                prev_x, prev_y, prev_w, prev_h = frame_grid[row-1][col]
+                expected_x = prev_x
+                expected_y = prev_y + avg_height
+                # 예상 위치 주변에서 프레임 검색
+                search_area = image[
+                    max(0, int(expected_y - avg_height/2)):min(image.shape[0], int(expected_y + avg_height/2)),
+                    max(0, int(expected_x - prev_w)):min(image.shape[1], int(expected_x + prev_w))
+                ]
+                if search_area.size > 0:
+                    gray_search = cv2.cvtColor(search_area, cv2.COLOR_BGR2GRAY)
+                    _, thresh_search = cv2.threshold(gray_search, 150, 255, cv2.THRESH_BINARY_INV)
+                    search_contours, _ = cv2.findContours(thresh_search, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    for cnt in search_contours:
+                        sx, sy, sw, sh = cv2.boundingRect(cnt)
+                        if (valid_width_range[0] <= sw <= valid_width_range[1] and 
+                            valid_height_range[0] <= sh <= valid_height_range[1]):
+                            frame_img = search_area[sy:sy+sh, sx:sx+sw]
+                            frame_img = clean_frame_border(frame_img)
+                            repeat_num = (row // 4) + 1
+                            box_num = (row % 4) + 1
+                            base_name = f"answer{selected_number}_question{question_num}_repeat{repeat_num}_box{box_num}"
+                            output_path = os.path.join(output_dir, f"{base_name}.jpg")
+                            cv2.imwrite(output_path, frame_img)
+                            print(f"추가 저장됨: {output_path} (위치: {col},{row})")
+                            if original_image is not None:
+                                original_frame = original_image[
+                                    max(0, int(expected_y - avg_height/2) + sy):min(image.shape[0], int(expected_y - avg_height/2) + sy + sh),
+                                    max(0, int(expected_x - prev_w) + sx):min(image.shape[1], int(expected_x - prev_w) + sx + sw)
+                                ]
+                                original_frame = clean_frame_border(original_frame)
+                                original_path = os.path.join(output_dir, f"{base_name}_origin.jpg")
+                                cv2.imwrite(original_path, original_frame)
+                                print(f"원본 프레임 저장됨: {original_path}")
+                            break
+
+    # 유효한 프레임 시각화
+    debug_valid = image.copy()
+    for x, y, w, h in valid_frames:
+        cv2.rectangle(debug_valid, (x, y), (x+w, y+h), (0, 255, 0), 2)
+        cv2.putText(debug_valid, f"({x},{y})", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+        cv2.putText(debug_valid, f"{w}x{h}", (x, y+h+20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+    cv2.imwrite(os.path.join(output_dir, 'debug_valid_frames.jpg'), debug_valid)
+
+    # 행 그룹화 결과 시각화
+    debug_rows = image.copy()
+    row_groups = {}
+    for idx, (x, y, w, h) in enumerate(valid_frames):
+        row_idx = row_map[row_labels[idx]]
+        if row_idx not in row_groups:
+            row_groups[row_idx] = []
+        row_groups[row_idx].append((x, y, w, h))
+    for row_idx, frames in row_groups.items():
+        color = (np.random.randint(0, 255), np.random.randint(0, 255), np.random.randint(0, 255))
+        for x, y, w, h in frames:
+            cv2.rectangle(debug_rows, (x, y), (x+w, y+h), color, 2)
+            cv2.putText(debug_rows, f"row={row_idx}", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+    cv2.imwrite(os.path.join(output_dir, 'debug_row_groups.jpg'), debug_rows)
+
+    # 프레임 그리드 시각화
+    debug_grid = image.copy()
+    for row in range(n_rows):
+        for col in range(n_cols):
+            frame = frame_grid[row][col]
+            if frame is not None:
+                x, y, w, h = frame
+                cv2.rectangle(debug_grid, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                cv2.putText(debug_grid, f"({row},{col})", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+            else:
+                # 누락된 프레임 위치 표시 (평균 위치 사용)
+                if row in row_groups and col in col_map.values():
+                    y_mean = int(np.mean([f[1] for f in row_groups[row]]))
+                    x_mean = int(np.mean([f[0] for f in [valid_frames[i] for i in range(len(valid_frames)) if col_map[col_labels[i]]==col]]))
+                    cv2.rectangle(debug_grid, 
+                                (x_mean, y_mean), 
+                                (x_mean + int(avg_width), y_mean + int(avg_height)), 
+                                (0, 0, 255), 2)
+                    cv2.putText(debug_grid, f"Missing ({row},{col})", 
+                              (x_mean, y_mean-10), 
+                              cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+    cv2.imwrite(os.path.join(output_dir, 'debug_frame_grid.jpg'), debug_grid)
     
     # 템플릿 이미지가 제공된 경우 템플릿 출력 생성
     if template_path and template_name:
@@ -784,8 +812,8 @@ def reading_detect_and_save_frames(image, output_dir, template_path=None, templa
             
         create_template_output(template_path, output_dir, template_name)
     
-    print(f"\n총 추출된 프레임 수: {total_frames}/84")
-    if total_frames < 84:
+    print(f"\n총 추출된 프레임 수: {len(valid_frames)}/84")
+    if len(valid_frames) < 84:
         print("경고: 일부 프레임이 누락되었습니다.")
     print("\n프레임 추출 완료")
     
