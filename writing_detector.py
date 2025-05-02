@@ -301,7 +301,10 @@ def writing_detect_and_save_frames(image, output_dir, template_path=None, templa
     # 격자 구조 결합
     try:
         grid = cv2.addWeighted(vertical_lines, 0.5, horizontal_lines, 0.5, 0.0)
-        grid = cv2.dilate(grid, np.ones((3,3), np.uint8), iterations=1)
+        # 모폴로지 연산으로 격자 선 강화
+        kernel = np.ones((3,3), np.uint8)
+        grid = cv2.dilate(grid, kernel, iterations=1)
+        grid = cv2.erode(grid, kernel, iterations=1)
         print(f"격자 이미지 shape: {grid.shape}")
     except cv2.error as e:
         print(f"격자 구조 결합 중 오류 발생: {e}")
@@ -331,13 +334,16 @@ def writing_detect_and_save_frames(image, output_dir, template_path=None, templa
     
     # 윤곽선 찾기
     contours, hierarchy = cv2.findContours(
-        grid, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE
+        grid, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
     
     # 답안 프레임 필터링
     all_frames = []
     min_area = image.shape[0] * image.shape[1] * 0.001  # 최소 영역 크기
     max_area = image.shape[0] * image.shape[1] * 0.02   # 최대 영역 크기
+    
+    # 프레임 중복 제거를 위한 최소 거리 설정
+    min_distance = min(image.shape[0], image.shape[1]) * 0.05  # 이미지 크기의 5%
     
     for cnt in contours:
         area = cv2.contourArea(cnt)
@@ -347,7 +353,16 @@ def writing_detect_and_save_frames(image, output_dir, template_path=None, templa
             
             # 정사각형에 가까운 프레임만 선택
             if 0.8 < aspect_ratio < 1.2:
-                all_frames.append((x, y, w, h))
+                # 기존 프레임과의 거리 확인
+                is_duplicate = False
+                for existing_x, existing_y, _, _ in all_frames:
+                    distance = np.sqrt((x - existing_x)**2 + (y - existing_y)**2)
+                    if distance < min_distance:
+                        is_duplicate = True
+                        break
+                
+                if not is_duplicate:
+                    all_frames.append((x, y, w, h))
     
     print(f"\n감지된 모든 프레임 수: {len(all_frames)}")
     
@@ -375,14 +390,14 @@ def writing_detect_and_save_frames(image, output_dir, template_path=None, templa
     q1_width = np.percentile(sizes_array[:, 0], 25)
     q3_width = np.percentile(sizes_array[:, 0], 75)
     iqr_width = q3_width - q1_width
-    lower_bound_width = q1_width - 1.5 * iqr_width
-    upper_bound_width = q3_width + 1.5 * iqr_width
+    lower_bound_width = q1_width - 2.0 * iqr_width
+    upper_bound_width = q3_width + 2.0 * iqr_width
     
     q1_height = np.percentile(sizes_array[:, 1], 25)
     q3_height = np.percentile(sizes_array[:, 1], 75)
     iqr_height = q3_height - q1_height
-    lower_bound_height = q1_height - 1.5 * iqr_height
-    upper_bound_height = q3_height + 1.5 * iqr_height
+    lower_bound_height = q1_height - 2.0 * iqr_height
+    upper_bound_height = q3_height + 2.0 * iqr_height
     
     # 이상치를 제외한 프레임만 선택
     valid_sizes = sizes_array[
@@ -400,6 +415,27 @@ def writing_detect_and_save_frames(image, output_dir, template_path=None, templa
     print(f"이상치 제거 전 프레임 수: {len(sizes_array)}")
     print(f"이상치 제거 후 프레임 수: {len(valid_sizes)}")
     print("=====================\n")
+    
+    # 이상치 제거 후 프레임 시각화
+    debug_valid_frames = image.copy()
+    for x, y, w, h in all_frames:
+        if (lower_bound_width <= w <= upper_bound_width and 
+            lower_bound_height <= h <= upper_bound_height):
+            # 유효한 프레임은 녹색으로 표시
+            cv2.rectangle(debug_valid_frames, (x, y), (x+w, y+h), (0, 255, 0), 2)
+            # 프레임 크기 표시
+            cv2.putText(debug_valid_frames, f"{w}x{h}", (x, y-5), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+        else:
+            # 이상치로 제거된 프레임은 빨간색으로 표시
+            cv2.rectangle(debug_valid_frames, (x, y), (x+w, y+h), (0, 0, 255), 2)
+            # 프레임 크기 표시
+            cv2.putText(debug_valid_frames, f"{w}x{h}", (x, y-5), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+    
+    # 디버그 이미지 저장
+    cv2.imwrite(os.path.join(output_dir, 'debug_valid_frames.jpg'), debug_valid_frames)
+    print("이상치 제거 후 프레임 디버그 이미지 저장됨: debug_valid_frames.jpg")
     
     # 체크란 크기 범위 설정 (답안 프레임의 50% 기준, ±10% 허용)
     checkbox_size = avg_width * 0.5
@@ -578,6 +614,7 @@ def writing_detect_and_save_frames(image, output_dir, template_path=None, templa
     sorted_rows = []
     for row_y in sorted(row_groups.keys()):
         row_frames = row_groups[row_y]
+        # x 좌표로 정렬하되, 왼쪽에서 오른쪽으로
         row_frames.sort(key=lambda f: f[0])
         sorted_rows.append(row_frames)
     
@@ -590,30 +627,44 @@ def writing_detect_and_save_frames(image, output_dir, template_path=None, templa
         print("경고: debug_resized.jpg를 찾을 수 없습니다. 원본 프레임 추출을 건너뜁니다.")
     
     for row_idx, row in enumerate(sorted_rows, 1):
-        left_frames = [f for f in row if f[0] < mid_x]
-        right_frames = [f for f in row if f[0] >= mid_x]
+        # 프레임을 x 좌표 기준으로 정렬
+        sorted_frames = sorted(row, key=lambda f: f[0])
+        
+        # 한 행의 6개 프레임을 왼쪽 3개, 오른쪽 3개로 나누기
+        total_frames = len(sorted_frames)
+        if total_frames > 0:
+            left_frames = sorted_frames[:min(3, total_frames//2)]
+            right_frames = sorted_frames[min(3, total_frames//2):min(6, total_frames)]
+        else:
+            left_frames = []
+            right_frames = []
+        
+        # 디버그 이미지 생성
+        debug_frame_positions = image.copy()
         
         # 왼쪽 프레임 처리 (문제2)
-        for col_idx, (x, y, w, h) in enumerate(sorted(left_frames, key=lambda f: f[0]), 1):
-            if col_idx > 3: continue
+        for col_idx, (x, y, w, h) in enumerate(left_frames, 1):
             padding = 5
+            
+            # 프레임 위치 표시 (녹색)
+            cv2.rectangle(debug_frame_positions, (x, y), (x+w, y+h), (0, 255, 0), 2)
+            # 프레임 번호 표시
+            cv2.putText(debug_frame_positions, f"L{row_idx}-{col_idx}", (x, y-10), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
             
             # 전처리된 이미지에서 프레임 추출
             frame = image[y+padding:y+h-padding, x+padding:x+w-padding]
             frame = clean_frame_border(frame)
-            frame_height, frame_width = frame.shape[:2]  # 전처리된 프레임의 크기 저장
+            frame_height, frame_width = frame.shape[:2]
             
-            repeat_suffix = {1: "03", 2: "02", 3: "01"}[col_idx]  # 역순으로 변경
+            repeat_suffix = {1: "03", 2: "02", 3: "01"}[col_idx]
             base_name = f"frame_{selected_q2}_{row_idx}_{repeat_suffix}"
             output_path = os.path.join(output_dir, f"{base_name}.jpg")
             cv2.imwrite(output_path, frame)
             print(f"저장됨: {output_path}")
             
-            # 원본 이미지에서 동일한 위치의 프레임 추출
             if original_image is not None:
-                # 전처리된 이미지와 동일한 위치와 크기로 추출
                 original_frame = original_image[y+padding:y+h-padding, x+padding:x+w-padding]
-                # 전처리된 프레임과 동일한 크기로 리사이즈
                 if original_frame.shape[:2] != (frame_height, frame_width):
                     original_frame = cv2.resize(original_frame, (frame_width, frame_height))
                 original_path = os.path.join(output_dir, f"{base_name}_origin.jpg")
@@ -621,31 +672,38 @@ def writing_detect_and_save_frames(image, output_dir, template_path=None, templa
                 print(f"원본 프레임 저장됨: {original_path}")
         
         # 오른쪽 프레임 처리 (문제1)
-        for col_idx, (x, y, w, h) in enumerate(sorted(right_frames, key=lambda f: f[0]), 1):
-            if col_idx > 3: continue
+        for col_idx, (x, y, w, h) in enumerate(right_frames, 1):
             padding = 5
+            
+            # 프레임 위치 표시 (녹색)
+            cv2.rectangle(debug_frame_positions, (x, y), (x+w, y+h), (0, 255, 0), 2)
+            # 프레임 번호 표시
+            cv2.putText(debug_frame_positions, f"R{row_idx}-{col_idx}", (x, y-10), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
             
             # 전처리된 이미지에서 프레임 추출
             frame = image[y+padding:y+h-padding, x+padding:x+w-padding]
             frame = clean_frame_border(frame)
-            frame_height, frame_width = frame.shape[:2]  # 전처리된 프레임의 크기 저장
+            frame_height, frame_width = frame.shape[:2]
             
-            repeat_suffix = {1: "03", 2: "02", 3: "01"}[col_idx]  # 역순으로 변경
+            repeat_suffix = {1: "03", 2: "02", 3: "01"}[col_idx]
             base_name = f"frame_{selected_q1}_{row_idx}_{repeat_suffix}"
             output_path = os.path.join(output_dir, f"{base_name}.jpg")
             cv2.imwrite(output_path, frame)
             print(f"저장됨: {output_path}")
             
-            # 원본 이미지에서 동일한 위치의 프레임 추출
             if original_image is not None:
-                # 전처리된 이미지와 동일한 위치와 크기로 추출
                 original_frame = original_image[y+padding:y+h-padding, x+padding:x+w-padding]
-                # 전처리된 프레임과 동일한 크기로 리사이즈
                 if original_frame.shape[:2] != (frame_height, frame_width):
                     original_frame = cv2.resize(original_frame, (frame_width, frame_height))
                 original_path = os.path.join(output_dir, f"{base_name}_origin.jpg")
                 cv2.imwrite(original_path, original_frame)
                 print(f"원본 프레임 저장됨: {original_path}")
+        
+        # 디버그 이미지 저장
+        debug_path = os.path.join(output_dir, f'debug_frame_positions_row_{row_idx}.jpg')
+        cv2.imwrite(debug_path, debug_frame_positions)
+        print(f"프레임 위치 디버그 이미지 저장됨: {debug_path}")
     
     print("\n프레임 추출 완료")
 
