@@ -82,8 +82,8 @@ def create_template_output(image, template_path, output_dir, template_name):
     
     # 템플릿 프레임 설정
     frame_size = 130
-    rows = 23
-    cols = 22
+    rows = 33
+    cols = 34
     
     # 시작 위치 계산 (중앙 정렬)
     start_x = (template.shape[1] - (cols * (frame_size))) // 2
@@ -119,9 +119,9 @@ def create_template_output(image, template_path, output_dir, template_name):
     # 문제 번호별 시작 위치 계산
     question_start_positions = {
         "01": (1, 0),    # 1번 문제: 1번째 줄, 1번째 칸부터
-        "02": (1, 21),   # 2번 문제: 1번째 줄, 22번째 칸부터
-        "03": (2, 20),   # 3번 문제: 2번째 줄, 21번째 칸부터
-        "04": (3, 19),   # 4번 문제: 3번째 줄, 20번째 칸부터
+        "02": (2, 12),   # 2번 문제: 1번째 줄, 22번째 칸부터
+        "03": (2, 40),   # 3번 문제: 2번째 줄, 21번째 칸부터
+        "04": (3, 38),   # 4번 문제: 3번째 줄, 20번째 칸부터
     }
     
     # 각 question 번호별로 프레임 배치 (01부터 04까지 순서대로)
@@ -141,14 +141,14 @@ def create_template_output(image, template_path, output_dir, template_name):
         current_row = start_row
         current_col = start_col
         
-        while frame_count < 21 and current_row < rows:
+        while frame_count < 17 and current_row < rows:
             x = start_x + current_col * (frame_size)
             y = start_y + current_row * (frame_size)
             template_frames.append((x, y, frame_size, frame_size))
             frame_count += 1
             
             # 다음 위치 계산
-            current_col += 1
+            current_col += 2
             if current_col >= cols:  # 열이 끝나면 다음 행으로
                 current_col = 0
                 current_row += 1

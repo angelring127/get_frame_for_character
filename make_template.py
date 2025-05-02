@@ -11,8 +11,8 @@ def create_template_with_frames():
     frame_size = 130
     
     # 23행으로 설정
-    rows = 23
-    cols = 22  # 첫 줄에 1부터 22까지의 숫자를 넣기 위해 22열로 설정
+    rows = 33
+    cols = 34  # 첫 줄에 1부터 22까지의 숫자를 넣기 위해 22열로 설정
     
     # 실제 사용할 프레임 개수
     total_frames = rows * cols

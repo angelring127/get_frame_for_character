@@ -58,16 +58,16 @@ def main(image_path, flag, template_name=None):
         processed_image, scale = preprocessor.preprocess(image_path)
         
         # 종이 영역 감지
-        box = preprocessor.detect_paper(processed_image, image_path)
-        if box is not None:
-            # 종이 영역 자르기 및 변환
-            processed_image = preprocessor.crop_and_transform(processed_image, box, scale, image_path)
-            # 디버깅을 위해 크롭된 이미지 저장
-            debug_cropped_path = os.path.join(output_dir, 'debug_cropped.jpg')
-            cv2.imwrite(debug_cropped_path, processed_image)
-            print(f"크롭된 이미지 저장됨: {debug_cropped_path}")
-        else:
-            print("문서 감지에 실패하여 크롭을 건너뜁니다.")
+        # box = preprocessor.detect_paper(processed_image, image_path)
+        # if box is not None:
+        #     # 종이 영역 자르기 및 변환
+        #     processed_image = preprocessor.crop_and_transform(processed_image, box, scale, image_path)
+        #     # 디버깅을 위해 크롭된 이미지 저장
+        #     debug_cropped_path = os.path.join(output_dir, 'debug_cropped.jpg')
+        #     cv2.imwrite(debug_cropped_path, processed_image)
+        #     print(f"크롭된 이미지 저장됨: {debug_cropped_path}")
+        # else:
+        #     print("문서 감지에 실패하여 크롭을 건너뜁니다.")
         
         # 플래그 값에 따라 적절한 함수 호출
         if flag == 1:

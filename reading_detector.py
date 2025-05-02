@@ -264,14 +264,14 @@ def create_template_output(template_path, output_dir, template_name):
             else:
                 raise ValueError(f"템플릿 이미지를 불러올 수 없습니다: {template_path}")
     
-    # 템플릿 크기를 5000x5000으로 고정
+    # 템플릿 크기를 7000x5000으로 고정
     template = cv2.resize(template, (5000, 5000))
     output = template.copy()
     
     # 템플릿 프레임 설정
     frame_size = 130
-    rows = 23
-    cols = 22
+    rows = 33
+    cols = 34
     
     # 시작 위치 계산 (중앙 정렬)
     start_x = (template.shape[1] - (cols * (frame_size))) // 2
@@ -294,10 +294,10 @@ def create_template_output(template_path, output_dir, template_name):
     
     # 문제 번호별 시작 위치 계산
     question_start_positions = {
-        1: (4, 0),    # 1번 문제: 5번째 줄, 1번째 칸부터
-        2: (7, 18),   # 2번 문제: 8번째 줄, 19번째 칸부터
-        3: (11, 14),  # 3번 문제: 12번째 줄, 15번째 칸부터
-        4: (15, 10)   # 4번 문제: 16번째 줄, 11번째 칸부터
+        1: (5, 0),    # 1번 문제: 5번째 줄, 1번째 칸부터
+        2: (8, 36),   # 2번 문제: 8번째 줄, 19번째 칸부터
+        3: (12, 28),  # 3번 문제: 12번째 줄, 15번째 칸부터
+        4: (16, 20)   # 4번 문제: 16번째 줄, 11번째 칸부터
     }
     
     # 선택된 문제 번호에 따른 시작 위치 설정
@@ -317,7 +317,7 @@ def create_template_output(template_path, output_dir, template_name):
         frame_count += 1
         
         # 다음 위치 계산
-        current_col += 1
+        current_col += 2
         if current_col >= cols:  # 열이 끝나면 다음 행으로
             current_col = 0
             current_row += 1
