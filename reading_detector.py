@@ -339,9 +339,9 @@ def create_template_output(template_path, output_dir, template_name):
     # 문제 번호별 시작 위치 계산
     question_start_positions = {
         1: (5, 0),    # 1번 문제: 5번째 줄, 1번째 칸부터
-        2: (8, 32),   # 2번 문제: 8번째 줄, 19번째 칸부터
-        3: (11, 30),  # 3번 문제: 12번째 줄, 15번째 칸부터
-        4: (14, 28)   # 4번 문제: 16번째 줄, 11번째 칸부터
+        2: (9, 32),   # 2번 문제: 9번째 줄, 32번째 칸부터
+        3: (13, 30),  # 3번 문제: 13번째 줄, 30번째 칸부터
+        4: (17, 28)   # 4번 문제: 17번째 줄, 28번째 칸부터
     }
     
     # 선택된 문제 번호에 따른 시작 위치 설정
@@ -655,6 +655,43 @@ def reading_detect_and_save_frames(image, output_dir, template_path=None, templa
     print(f"이상치 제거 후 프레임 수: {len(valid_sizes)}")
     print("=====================\n")
     
+    # 위치 기반 중복 제거를 위한 거리 임계값 설정
+    distance_threshold = min(avg_width, avg_height) * 0.3  # 프레임 크기의 30%를 임계값으로 설정
+    
+    # 유효한 프레임 범위 설정 (±15%)
+    valid_width_range = (avg_width * 0.85, avg_width * 1.15)
+    valid_height_range = (avg_height * 0.85, avg_height * 1.15)
+    
+    # 크기 기준으로 유효한 프레임 선택
+    size_valid_frames = []
+    for x, y, w, h in all_frames:
+        if (valid_width_range[0] <= w <= valid_width_range[1] and 
+            valid_height_range[0] <= h <= valid_height_range[1]):
+            size_valid_frames.append((x, y, w, h))
+    
+    # 위치 기반 중복 제거
+    valid_frames = []
+    used_positions = set()
+    
+    for frame in sorted(size_valid_frames, key=lambda f: f[2] * f[3], reverse=True):  # 면적이 큰 순서대로 처리
+        x, y, w, h = frame
+        frame_center = (x + w/2, y + h/2)
+        
+        # 이미 처리된 프레임들과의 거리 확인
+        is_duplicate = False
+        for used_x, used_y in used_positions:
+            distance = np.sqrt((frame_center[0] - used_x)**2 + (frame_center[1] - used_y)**2)
+            if distance < distance_threshold:
+                is_duplicate = True
+                break
+        
+        if not is_duplicate:
+            valid_frames.append(frame)
+            used_positions.add((frame_center[0], frame_center[1]))
+    
+    print(f"크기 기준 유효 프레임 수: {len(size_valid_frames)}")
+    print(f"위치 중복 제거 후 프레임 수: {len(valid_frames)}")
+
     # 체크란 감지
     selected_question, checkboxes = detect_checkboxes(image, avg_width, output_dir)
     
@@ -673,18 +710,13 @@ def reading_detect_and_save_frames(image, output_dir, template_path=None, templa
         cv2.imwrite(output_path, checkbox)
         print(f"체크란 저장됨: {output_path}")
     
-    # 유효한 프레임 범위 설정 (±15%)
-    valid_width_range = (avg_width * 0.85, avg_width * 1.15)
-    valid_height_range = (avg_height * 0.85, avg_height * 1.15)
-    
-    # 유효한 프레임만 선택
-    valid_frames = []
-    for x, y, w, h in all_frames:
-        if (valid_width_range[0] <= w <= valid_width_range[1] and 
-            valid_height_range[0] <= h <= valid_height_range[1]):
-            valid_frames.append((x, y, w, h))
-    
-    print(f"유효한 프레임 수: {len(valid_frames)}")
+    # 유효한 프레임 시각화
+    debug_valid = image.copy()
+    for x, y, w, h in valid_frames:
+        cv2.rectangle(debug_valid, (x, y), (x+w, y+h), (0, 255, 0), 2)
+        cv2.putText(debug_valid, f"({x},{y})", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+        cv2.putText(debug_valid, f"{w}x{h}", (x, y+h+20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+    cv2.imwrite(os.path.join(output_dir, 'debug_valid_frames.jpg'), debug_valid)
 
     # === K-means로 y좌표 클러스터링하여 행 그룹핑 ===
     y_values = np.array([[y + h//2] for _, y, _, h in valid_frames])
@@ -797,14 +829,6 @@ def reading_detect_and_save_frames(image, output_dir, template_path=None, templa
                                 print(f"원본 프레임 저장됨: {original_path}")
                             break
 
-    # 유효한 프레임 시각화
-    debug_valid = image.copy()
-    for x, y, w, h in valid_frames:
-        cv2.rectangle(debug_valid, (x, y), (x+w, y+h), (0, 255, 0), 2)
-        cv2.putText(debug_valid, f"({x},{y})", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-        cv2.putText(debug_valid, f"{w}x{h}", (x, y+h+20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-    cv2.imwrite(os.path.join(output_dir, 'debug_valid_frames.jpg'), debug_valid)
-
     # 행 그룹화 결과 시각화
     debug_rows = image.copy()
     row_groups = {}
@@ -842,7 +866,7 @@ def reading_detect_and_save_frames(image, output_dir, template_path=None, templa
                               (x_mean, y_mean-10), 
                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
     cv2.imwrite(os.path.join(output_dir, 'debug_frame_grid.jpg'), debug_grid)
-    
+
     # 템플릿 이미지가 제공된 경우 템플릿 출력 생성
     if template_path and template_name:
         print(f"\n템플릿 생성 시작: {template_name}")  # 디버깅용 출력 추가
