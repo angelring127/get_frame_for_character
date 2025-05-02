@@ -119,9 +119,9 @@ def create_template_output(image, template_path, output_dir, template_name):
     # 문제 번호별 시작 위치 계산
     question_start_positions = {
         "01": (1, 0),    # 1번 문제: 1번째 줄, 1번째 칸부터
-        "02": (2, 12),   # 2번 문제: 1번째 줄, 22번째 칸부터
-        "03": (2, 40),   # 3번 문제: 2번째 줄, 21번째 칸부터
-        "04": (3, 38),   # 4번 문제: 3번째 줄, 20번째 칸부터
+        "02": (2, 8),   # 2번 문제: 2번째 줄, 9번째 칸부터
+        "03": (3, 16),   # 3번 문제: 3번째 줄, 17번째 칸부터
+        "04": (4, 24),   # 4번 문제: 4번째 줄, 25번째 칸부터
     }
     
     # 각 question 번호별로 프레임 배치 (01부터 04까지 순서대로)
@@ -135,13 +135,13 @@ def create_template_output(image, template_path, output_dir, template_name):
         start_row, start_col = question_start_positions[question_num]
         print(f"\n문제 {question_num} 프레임 배치 시작 [시작 위치: 행={start_row}, 열={start_col}]")
         
-        # 프레임 위치 계산 (21개의 프레임을 시작 위치부터 순차적으로)
+        # 프레임 위치 계산 (34개의 프레임을 시작 위치부터 순차적으로)
         template_frames = []
         frame_count = 0
         current_row = start_row
         current_col = start_col
         
-        while frame_count < 17 and current_row < rows:
+        while frame_count < 21 and current_row < rows:
             x = start_x + current_col * (frame_size)
             y = start_y + current_row * (frame_size)
             template_frames.append((x, y, frame_size, frame_size))
