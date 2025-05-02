@@ -6,6 +6,11 @@ from sklearn.cluster import KMeans
 def detect_checkboxes(image, avg_width, output_dir):
     """
     이미지에서 체크란을 감지하고 선택된 문제 번호를 반환합니다.
+    체크란 조건:
+    - 기본 프레임의 60-50% 크기
+    - 4개의 체크리스트가 수직으로 나열
+    - x값이 비슷하고 y값이 높은순으로 1,2,3,4
+    - y의 간격이 비슷함
     """
     # 출력 디렉토리가 없으면 생성
     if not os.path.exists(output_dir):
@@ -16,26 +21,24 @@ def detect_checkboxes(image, avg_width, output_dir):
     width = image.shape[1]
     right_area = image[:, int(width*0.75):]  # 오른쪽 25% 영역만 처리
     
-    # 체크란 크기 범위 설정 (답안 프레임의 50% 기준, ±15% 허용)
-    checkbox_size = avg_width * 0.5
-    checkbox_range = (int(checkbox_size * 0.85), int(checkbox_size * 1.15))
+    # 체크란 크기 범위 설정 (답안 프레임의 50-60% 기준)
+    checkbox_min_size = avg_width * 0.5
+    checkbox_max_size = avg_width * 0.6
     
-    print(f"체크란 크기 범위: {checkbox_range[0]}~{checkbox_range[1]}")
+    print(f"체크란 크기 범위: {checkbox_min_size:.0f}~{checkbox_max_size:.0f}")
     
-    # 검은색 체크란 감지를 위한 이진화 (임계값 조정)
+    # 검은색 체크란 감지를 위한 이진화
     lower_black = np.array([0, 0, 0])
-    upper_black = np.array([80, 80, 80])  # 임계값 증가
+    upper_black = np.array([80, 80, 80])
     black_mask = cv2.inRange(right_area, lower_black, upper_black)
     
-    # 모폴로지 연산으로 노이즈 제거 및 체크란 강화
+    # 모폴로지 연산으로 노이즈 제거
     kernel = np.ones((3,3), np.uint8)
     black_mask = cv2.morphologyEx(black_mask, cv2.MORPH_CLOSE, kernel)
     black_mask = cv2.morphologyEx(black_mask, cv2.MORPH_OPEN, kernel)
     
     # 디버깅을 위해 black_mask 저장
-    debug_black_mask_path = os.path.join(output_dir, 'debug_black_mask.jpg')
-    cv2.imwrite(debug_black_mask_path, black_mask)
-    print(f"디버그 이미지 저장됨: {debug_black_mask_path}")
+    cv2.imwrite(os.path.join(output_dir, 'debug_black_mask.jpg'), black_mask)
     
     # 체크란 윤곽선 찾기
     checkbox_contours, _ = cv2.findContours(black_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -43,113 +46,153 @@ def detect_checkboxes(image, avg_width, output_dir):
     print(f"\n감지된 체크란 후보 수: {len(checkbox_contours)}")
     
     checkboxes = []
-    for i, cnt in enumerate(checkbox_contours):
+    for cnt in checkbox_contours:
         x, y, w, h = cv2.boundingRect(cnt)
         aspect_ratio = w/h if h != 0 else 0
         
-        # 체크란 크기 조건 확인 (조건 완화)
-        if (checkbox_range[0] <= w <= checkbox_range[1] and 
-            checkbox_range[0] <= h <= checkbox_range[1] and 
-            0.75 < aspect_ratio < 1.25):  # 비율 범위 확대
+        # 체크란 크기 및 비율 조건 확인
+        if (checkbox_min_size <= w <= checkbox_max_size and 
+            checkbox_min_size <= h <= checkbox_max_size and 
+            0.9 < aspect_ratio < 1.1):  # 정사각형에 가까운 비율
             
-            # 테두리를 제외한 내부 영역 추출 (패딩 축소)
-            padding_ratio = 0.05  # 패딩 비율 축소
-            pad_x = int(w * padding_ratio)
-            pad_y = int(h * padding_ratio)
-            
-            # 박스 내부 영역 추출 및 적응형 이진화 적용
-            roi = right_area[y+pad_y:y+h-pad_y, x+pad_x:x+w-pad_x]
-            if roi.size > 0:  # ROI가 유효한 경우에만 처리
-                gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-                thresh = cv2.adaptiveThreshold(
-                    gray_roi, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                    cv2.THRESH_BINARY, 11, 2
-                )
-                
-                white_pixels = np.sum(thresh == 255)
-                total_pixels = roi.shape[0] * roi.shape[1]
-                white_ratio = white_pixels / total_pixels
-                
-                print(f"체크란 후보 {i}: 크기 {w}x{h}, 비율 {aspect_ratio:.2f}, 흰색 비율 {white_ratio:.3f}")
-                
-                checkboxes.append({
-                    'position': (x + int(width*0.75), y),  # 전체 이미지 기준 좌표로 변환 (0.75로 수정)
-                    'size': (w, h),
-                    'white_ratio': white_ratio,
-                    'is_checked': False,
-                    'number': None
-                })
+            # 전체 이미지 기준 좌표로 변환
+            abs_x = x + int(width*0.75)
+            checkboxes.append({
+                'position': (abs_x, y),
+                'size': (w, h),
+                'white_ratio': None,
+                'is_checked': False,
+                'number': None
+            })
     
-    # 체크박스들을 x 좌표가 비슷한 것들끼리 그룹화
+    # x 좌표가 비슷한 체크박스들을 그룹화
     if len(checkboxes) >= 4:
         # x 좌표 기준으로 정렬
         checkboxes.sort(key=lambda box: box['position'][0])
         
-        # x 좌표가 비슷한 체크박스들을 그룹화 (허용 오차: avg_width의 10%)
+        # x 좌표가 비슷한 체크박스들을 그룹화
         x_tolerance = avg_width * 0.1
-        grouped_boxes = []
+        checkbox_groups = []
         current_group = [checkboxes[0]]
         
         for box in checkboxes[1:]:
             if abs(box['position'][0] - current_group[0]['position'][0]) <= x_tolerance:
                 current_group.append(box)
             else:
-                if len(current_group) >= 4:  # 유효한 그룹만 저장
-                    grouped_boxes.extend(current_group[:4])
+                if len(current_group) >= 4:  # 4개 이상인 그룹만 저장
+                    checkbox_groups.append(current_group)
                 current_group = [box]
         
         if len(current_group) >= 4:  # 마지막 그룹 처리
-            grouped_boxes.extend(current_group[:4])
+            checkbox_groups.append(current_group)
         
-        # y 좌표로 정렬하여 1-4번 할당
-        grouped_boxes.sort(key=lambda box: box['position'][1])
-        checkboxes = grouped_boxes[:4]
+        # 가장 적절한 그룹 선택 (y 간격이 가장 균일한 그룹)
+        best_group = None
+        min_y_variance = float('inf')
         
-        for i, box in enumerate(checkboxes):
-            box['number'] = f"question{i+1}"
-    
-    # 체크박스 감지 부분 수정
-    selected_question = 'question01'  # 기본값 설정
-    
-    if len(checkboxes) >= 4:
-        # 흰색 비율이 가장 낮은 체크박스 찾기 (임계값 조정)
-        min_white_ratio = float('inf')
-        selected_box = None
+        for group in checkbox_groups:
+            # y 좌표로 정렬
+            group.sort(key=lambda box: box['position'][1])
+            if len(group) >= 4:
+                # y 간격 계산
+                y_gaps = []
+                for i in range(1, 4):
+                    gap = group[i]['position'][1] - group[i-1]['position'][1]
+                    y_gaps.append(gap)
+                # y 간격의 분산 계산
+                y_variance = np.var(y_gaps)
+                if y_variance < min_y_variance:
+                    min_y_variance = y_variance
+                    best_group = group[:4]  # 상위 4개만 선택
         
-        for box in checkboxes[:4]:
-            # 흰색 비율이 0.85 미만이고 가장 낮은 경우를 체크된 것으로 간주
-            if box['white_ratio'] < 0.85 and box['white_ratio'] < min_white_ratio:
-                min_white_ratio = box['white_ratio']
-                selected_box = box
+        if best_group:
+            checkboxes = best_group
+            # 체크박스 번호 할당 (y 좌표 기준 내림차순)
+            white_ratios = []
+            for i, box in enumerate(checkboxes):
+                box['number'] = f"question{i+1}"
+                
+                # 내부 영역 분석
+                x, y = box['position']
+                w, h = box['size']
+                
+                # 패딩 비율을 줄여서 더 많은 영역을 분석
+                padding_ratio = 0.05
+                pad_x = int(w * padding_ratio)
+                pad_y = int(h * padding_ratio)
+                
+                roi = image[y+pad_y:y+h-pad_y, x+pad_x:x+w-pad_x]
+                if roi.size > 0:
+                    # 그레이스케일 변환
+                    gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+                    
+                    # 적응형 이진화 적용
+                    binary = cv2.adaptiveThreshold(
+                        gray_roi,
+                        255,
+                        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                        cv2.THRESH_BINARY,
+                        11,
+                        2
+                    )
+                    
+                    # 노이즈 제거
+                    kernel = np.ones((2,2), np.uint8)
+                    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
+                    
+                    # 흰색 픽셀 비율 계산
+                    white_ratio = np.sum(binary == 255) / binary.size
+                    box['white_ratio'] = white_ratio
+                    white_ratios.append(white_ratio)
+                    
+                    # 디버깅을 위해 이진화된 ROI 저장
+                    debug_roi_path = os.path.join(output_dir, f'debug_checkbox_roi_{i+1}.jpg')
+                    cv2.imwrite(debug_roi_path, binary)
         
-        # 선택된 체크박스 표시
-        if selected_box:
-            selected_box['is_checked'] = True
-            selected_question = selected_box['number']
-        else:
-            # 체크된 것이 없는 경우 기본값 설정
-            checkboxes[0]['is_checked'] = True
-            selected_question = 'question01'
+            if white_ratios:
+                # 흰색 비율이 가장 낮은 체크박스 찾기
+                min_white_ratio = min(white_ratios)
+                # 평균 흰색 비율 계산
+                avg_white_ratio = sum(white_ratios) / len(white_ratios)
+                # 표준편차 계산
+                std_white_ratio = np.std(white_ratios)
+                
+                print("\n=== 체크란 흰색 비율 분석 ===")
+                print(f"최소 흰색 비율: {min_white_ratio:.3f}")
+                print(f"평균 흰색 비율: {avg_white_ratio:.3f}")
+                print(f"표준편차: {std_white_ratio:.3f}")
+                
+                # 모든 체크박스의 체크 여부를 초기화
+                for box in checkboxes:
+                    box['is_checked'] = False
+                
+                # 가장 낮은 흰색 비율을 가진 체크박스만 체크된 것으로 표시
+                # 단, 평균보다 충분히 낮은 경우에만 (1.5 표준편차 이상 차이나는 경우)
+                for box in checkboxes:
+                    if box['white_ratio'] == min_white_ratio and box['white_ratio'] < (avg_white_ratio - 1.5 * std_white_ratio):
+                        box['is_checked'] = True
+                        selected_question = box['number']
+                        break
     
     # 체크란 표시 및 결과 출력
     print("\n=== 체크란 감지 결과 ===")
+    debug_image = image.copy()
     for box in checkboxes:
         x, y = box['position']
         w, h = box['size']
         color = (0, 255, 0) if box['is_checked'] else (0, 0, 255)
-        cv2.rectangle(image, (x, y), (x+w, y+h), color, 2)
+        cv2.rectangle(debug_image, (x, y), (x+w, y+h), color, 2)
+        
+        # 체크박스 번호와 흰색 비율 표시
+        text = f"{box['number']} ({box['white_ratio']:.2f})"
+        cv2.putText(debug_image, text, (x, y-5), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
         
         status = "체크됨 ✓" if box['is_checked'] else "체크되지 않음 ✗"
         print(f"{box['number']}: {status} (흰색 비율: {box['white_ratio']:.3f})")
     
-    print("\n=== 선택된 답안 ===")
-    print(f"선택된 문제: {selected_question}")
-    print("=====================\n")
-    
     # 디버깅을 위해 처리된 이미지 저장
-    debug_checkboxes_path = os.path.join(output_dir, 'debug_checkboxes.jpg')
-    cv2.imwrite(debug_checkboxes_path, image)
-    print(f"디버그 이미지 저장됨: {debug_checkboxes_path}")
+    cv2.imwrite(os.path.join(output_dir, 'debug_checkboxes.jpg'), debug_image)
     
     return selected_question, checkboxes
 
@@ -297,8 +340,8 @@ def create_template_output(template_path, output_dir, template_name):
     question_start_positions = {
         1: (5, 0),    # 1번 문제: 5번째 줄, 1번째 칸부터
         2: (8, 32),   # 2번 문제: 8번째 줄, 19번째 칸부터
-        3: (12, 28),  # 3번 문제: 12번째 줄, 15번째 칸부터
-        4: (16, 20)   # 4번 문제: 16번째 줄, 11번째 칸부터
+        3: (11, 30),  # 3번 문제: 12번째 줄, 15번째 칸부터
+        4: (14, 28)   # 4번 문제: 16번째 줄, 11번째 칸부터
     }
     
     # 선택된 문제 번호에 따른 시작 위치 설정
