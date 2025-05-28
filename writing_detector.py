@@ -447,7 +447,7 @@ def writing_detect_and_save_frames(image, output_dir, template_path=None, templa
     
     # 검은색 체크란 감지를 위한 이진화
     lower_black = np.array([0, 0, 0])
-    upper_black = np.array([50, 50, 50])  # 더 어두운 검은색만 감지
+    upper_black = np.array([100, 100, 100])  # 더 넓은 범위로 확장
     black_mask = cv2.inRange(top_area, lower_black, upper_black)
     
     # 모폴로지 연산으로 노이즈 제거
@@ -466,68 +466,51 @@ def writing_detect_and_save_frames(image, output_dir, template_path=None, templa
     for i, cnt in enumerate(checkbox_contours):
         x, y, w, h = cv2.boundingRect(cnt)
         aspect_ratio = w/h if h != 0 else 0
-        
-        # 체크란 크기 조건 확인
-        if (checkbox_range[0] <= w <= checkbox_range[1] and 
-            checkbox_range[0] <= h <= checkbox_range[1] and 
-            0.8 < aspect_ratio < 1.2):
-            
-            # 테두리를 제외한 내부 영역 추출 (20% 패딩)
+        # 크기 조건 완화: 0.3~0.7배, 비율 0.7~1.3
+        if (avg_width*0.3 <= w <= avg_width*0.7 and avg_height*0.3 <= h <= avg_height*0.7 and 0.7 < aspect_ratio < 1.3):
             padding_ratio = 0.2
             pad_x = int(w * padding_ratio)
             pad_y = int(h * padding_ratio)
-            
-            # 박스 내부의 V 표시 확인
             roi = top_area[y+pad_y:y+h-pad_y, x+pad_x:x+w-pad_x]
             gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
             _, v_thresh = cv2.threshold(gray_roi, 200, 255, cv2.THRESH_BINARY)
-            
-            # 디버깅을 위해 ROI 저장
-            cv2.imwrite(os.path.join(output_dir, f'debug_checkbox_roi_{i}.jpg'), roi)
-            cv2.imwrite(os.path.join(output_dir, f'debug_checkbox_thresh_{i}.jpg'), v_thresh)
-            
             white_pixels = np.sum(v_thresh == 255)
-            total_pixels = (w-2*pad_x) * (h-2*pad_y)  # 내부 영역 크기
-            white_ratio = white_pixels / total_pixels
-            
-            print(f"체크란 후보 {i}: 크기 {w}x{h}, 비율 {aspect_ratio:.2f}, 흰색 비율 {white_ratio:.3f}")
-            
+            total_pixels = (w-2*pad_x) * (h-2*pad_y)
+            white_ratio = white_pixels / total_pixels if total_pixels > 0 else 1.0
+            print(f"체크란 후보 {i}: 좌표=({x},{y}), 크기={w}x{h}, 비율={aspect_ratio:.2f}, 흰색 비율={white_ratio:.3f}")
             checkboxes.append({
                 'position': (x, y),
                 'size': (w, h),
                 'white_ratio': white_ratio,
                 'is_checked': False,
-                'number': None  # 문제 번호를 저장할 필드 추가
+                'number': None
             })
-    
-    # 체크박스들을 x 좌표 기준으로 정렬
-    checkboxes.sort(key=lambda box: box['position'][0], reverse=True)  # x 좌표 큰 순서대로 정렬
-    
-    # 체크박스 번호 할당 (영문으로 변경)
+    # 후보가 4개 미만/초과여도 x좌표 기준으로 왼쪽 2개, 오른쪽 2개 강제 분리
     if len(checkboxes) >= 4:
-        checkbox_numbers = ['question03', 'question01', 'question04', 'question02']
-        for i, box in enumerate(checkboxes[:4]):
-            box['number'] = checkbox_numbers[i]
-    
-    # 첫 번째 문제 체크 (checkbox 1, 2 비교)
-    if len(checkboxes) >= 2:
-        box1, box2 = checkboxes[0], checkboxes[1]  # question03, question01
-        if box1['white_ratio'] < box2['white_ratio']:
-            box1['is_checked'] = True
-        elif box2['white_ratio'] < box1['white_ratio']:
-            box2['is_checked'] = True
-        else:  # 동일하거나 체크가 없는 경우
-            box2['is_checked'] = True  # question01을 기본값으로 설정
-    
-    # 두 번째 문제 체크 (checkbox 3, 4 비교)
-    if len(checkboxes) >= 4:
-        box3, box4 = checkboxes[2], checkboxes[3]  # question04, question02
-        if box3['white_ratio'] < box4['white_ratio']:
-            box3['is_checked'] = True
-        elif box4['white_ratio'] < box3['white_ratio']:
-            box4['is_checked'] = True
-        else:  # 동일하거나 체크가 없는 경우
-            box3['is_checked'] = True  # question04를 기본값으로 설정
+        checkboxes.sort(key=lambda box: box['position'][0])
+        left_boxes = sorted(checkboxes[:2], key=lambda box: box['position'][1])
+        right_boxes = sorted(checkboxes[-2:], key=lambda box: box['position'][1])
+        left_boxes[0]['number'] = 'question02'
+        left_boxes[1]['number'] = 'question04'
+        right_boxes[0]['number'] = 'question01'
+        right_boxes[1]['number'] = 'question03'
+        checkboxes = [left_boxes[0], left_boxes[1], right_boxes[0], right_boxes[1]]
+    else:
+        print(f"[경고] 체크란 후보가 4개가 아님. 후보 전체: {len(checkboxes)}개")
+        for i, box in enumerate(checkboxes):
+            print(f"  후보{i}: 좌표={box['position']}, 크기={box['size']}, 흰색비율={box['white_ratio']:.3f}")
+    # 체크 여부 판단
+    if len(checkboxes) == 4:
+        # 問一 vs 問三
+        if checkboxes[2]['white_ratio'] < checkboxes[3]['white_ratio']:
+            checkboxes[2]['is_checked'] = True
+        else:
+            checkboxes[3]['is_checked'] = True
+        # 問二 vs 問四
+        if checkboxes[0]['white_ratio'] < checkboxes[1]['white_ratio']:
+            checkboxes[0]['is_checked'] = True
+        else:
+            checkboxes[1]['is_checked'] = True
     
     # 체크란 표시 및 결과 출력
     print("\n=== 체크란 감지 결과 ===")
@@ -541,11 +524,12 @@ def writing_detect_and_save_frames(image, output_dir, template_path=None, templa
         print(f"{box['number']}: {status} (흰색 비율: {box['white_ratio']:.3f})")
     
     print("\n=== 문제별 선택된 답안 ===")
-    selected_q1 = next((box['number'] for box in checkboxes[:2] if box['is_checked']), 'question01')
-    selected_q2 = next((box['number'] for box in checkboxes[2:4] if box['is_checked']), 'question04')
+    # 문제1(오른쪽, 問一/問三)은 checkboxes[2:4], 문제2(왼쪽, 問二/問四)는 checkboxes[0:2]
+    selected_q1 = next((box['number'] for box in checkboxes[2:4] if box['is_checked']), 'question01')
+    selected_q2 = next((box['number'] for box in checkboxes[0:2] if box['is_checked']), 'question04')
     print(f"문제1: {selected_q1}")
     print(f"문제2: {selected_q2}")
-    print("=====================\n")
+    print("=====================")
     
     # 디버깅을 위해 처리된 이미지 저장
     cv2.imwrite(os.path.join(output_dir, 'debug_checkboxes.jpg'), image)
