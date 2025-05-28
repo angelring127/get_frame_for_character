@@ -167,9 +167,8 @@ def detect_checkboxes(image, avg_width, output_dir):
                     box['is_checked'] = False
                 
                 # 가장 낮은 흰색 비율을 가진 체크박스만 체크된 것으로 표시
-                # 단, 평균보다 충분히 낮은 경우에만 (1.5 표준편차 이상 차이나는 경우)
                 for box in checkboxes:
-                    if box['white_ratio'] == min_white_ratio and box['white_ratio'] < (avg_white_ratio - 1.5 * std_white_ratio):
+                    if box['white_ratio'] == min_white_ratio:
                         box['is_checked'] = True
                         selected_question = box['number']
                         break
@@ -338,10 +337,10 @@ def create_template_output(template_path, output_dir, template_name):
     
     # 문제 번호별 시작 위치 계산
     question_start_positions = {
-        1: (5, 0),    # 1번 문제: 5번째 줄, 1번째 칸부터
-        2: (9, 32),   # 2번 문제: 9번째 줄, 32번째 칸부터
-        3: (13, 30),  # 3번 문제: 13번째 줄, 30번째 칸부터
-        4: (17, 28)   # 4번 문제: 17번째 줄, 28번째 칸부터
+        1: (6, 0),    # 1번 문제: 5번째 줄, 1번째 칸부터
+        2: (10, 32),   # 2번 문제: 9번째 줄, 32번째 칸부터
+        3: (15, 30),  # 3번 문제: 13번째 줄, 30번째 칸부터
+        4: (20, 28)   # 4번 문제: 17번째 줄, 28번째 칸부터
     }
     
     # 선택된 문제 번호에 따른 시작 위치 설정
