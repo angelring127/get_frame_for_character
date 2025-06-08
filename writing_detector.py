@@ -490,8 +490,8 @@ def writing_detect_and_save_frames(image, output_dir, template_path=None, templa
         checkboxes.sort(key=lambda box: box['position'][0])
         left_boxes = sorted(checkboxes[:2], key=lambda box: box['position'][1])
         right_boxes = sorted(checkboxes[-2:], key=lambda box: box['position'][1])
-        left_boxes[0]['number'] = 'question02'
-        left_boxes[1]['number'] = 'question04'
+        left_boxes[0]['number'] = 'question04'
+        left_boxes[1]['number'] = 'question02'
         right_boxes[0]['number'] = 'question01'
         right_boxes[1]['number'] = 'question03'
         checkboxes = [left_boxes[0], left_boxes[1], right_boxes[0], right_boxes[1]]
