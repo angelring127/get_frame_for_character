@@ -368,13 +368,17 @@ def writing_detect_and_save_frames(image, output_dir, template_path=None, templa
     
     # 디버깅을 위해 감지된 프레임 시각화
     debug_frame = image.copy()
-    for x, y, w, h in all_frames:
+    for i, (x, y, w, h) in enumerate(all_frames):
         cv2.rectangle(debug_frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
+        # 프레임 번호 표시
+        cv2.putText(debug_frame, str(i+1), (x+5, y+15), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
     
     # 디버그 이미지 저장 전 유효성 검사
     if debug_frame is not None and debug_frame.size > 0:
         try:
             cv2.imwrite(os.path.join(output_dir, 'debug_frames.jpg'), debug_frame)
+            print(f"전체 프레임 감지 이미지 저장됨: debug_frames.jpg (총 {len(all_frames)}개)")
         except cv2.error as e:
             print(f"디버그 프레임 이미지 저장 중 오류 발생: {e}")
     
@@ -441,9 +445,14 @@ def writing_detect_and_save_frames(image, output_dir, template_path=None, templa
     checkbox_size = avg_width * 0.5
     checkbox_range = (int(checkbox_size * 0.9), int(checkbox_size * 1.1))
     
-    # 체크란 감지
-    height = image.shape[0]
-    top_area = image[:height//4, :]  # 상단 25% 영역만 처리
+    # 체크란 감지 - 원본 이미지 사용
+    if original_image is not None:
+        checkbox_image = original_image
+    else:
+        checkbox_image = image
+    
+    height = checkbox_image.shape[0]
+    top_area = checkbox_image[:height//4, :]  # 상단 25% 영역만 처리
     
     # 검은색 체크란 감지를 위한 이진화
     lower_black = np.array([0, 0, 0])
@@ -485,16 +494,32 @@ def writing_detect_and_save_frames(image, output_dir, template_path=None, templa
                 'is_checked': False,
                 'number': None
             })
-    # 후보가 4개 미만/초과여도 x좌표 기준으로 왼쪽 2개, 오른쪽 2개 강제 분리
+    # x좌표 기준으로 체크란 위치 분류
     if len(checkboxes) >= 4:
+        # x좌표 기준으로 정렬
         checkboxes.sort(key=lambda box: box['position'][0])
-        left_boxes = sorted(checkboxes[:2], key=lambda box: box['position'][1])
-        right_boxes = sorted(checkboxes[-2:], key=lambda box: box['position'][1])
-        left_boxes[0]['number'] = 'question04'
-        left_boxes[1]['number'] = 'question02'
-        right_boxes[0]['number'] = 'question01'
-        right_boxes[1]['number'] = 'question03'
+        
+        # 왼쪽 2개 (02, 04) - x좌표가 작은 순서
+        left_boxes = sorted(checkboxes[:2], key=lambda box: box['position'][0])  # x좌표로 정렬
+        # 02가 04보다 왼쪽에 있음
+        left_boxes[0]['number'] = 'question02'  # 가장 왼쪽
+        left_boxes[1]['number'] = 'question04'  # 두 번째 왼쪽
+        
+        # 오른쪽 2개 (01, 03) - x좌표가 큰 순서  
+        right_boxes = sorted(checkboxes[-2:], key=lambda box: box['position'][0])  # x좌표로 정렬
+        # 01이 03보다 왼쪽에 있음 (오른쪽 그룹 내에서)
+        right_boxes[0]['number'] = 'question01'  # 오른쪽 그룹의 왼쪽
+        right_boxes[1]['number'] = 'question03'  # 오른쪽 그룹의 오른쪽
+        
+        # 최종 체크박스 배열: [question02, question04, question01, question03]
         checkboxes = [left_boxes[0], left_boxes[1], right_boxes[0], right_boxes[1]]
+        
+        print(f"\n=== 체크란 위치 분류 결과 ===")
+        for box in checkboxes:
+            x, y = box['position']
+            print(f"{box['number']}: x={x}, y={y}")
+        print("=========================")
+        
     else:
         print(f"[경고] 체크란 후보가 4개가 아님. 후보 전체: {len(checkboxes)}개")
         for i, box in enumerate(checkboxes):
@@ -514,11 +539,12 @@ def writing_detect_and_save_frames(image, output_dir, template_path=None, templa
     
     # 체크란 표시 및 결과 출력
     print("\n=== 체크란 감지 결과 ===")
+    debug_checkbox_image = checkbox_image.copy()
     for box in checkboxes:
         x, y = box['position']
         w, h = box['size']
         color = (0, 255, 0) if box['is_checked'] else (0, 0, 255)
-        cv2.rectangle(image, (x, y), (x+w, y+h), color, 2)
+        cv2.rectangle(debug_checkbox_image, (x, y), (x+w, y+h), color, 2)
         
         status = "체크됨 ✓" if box['is_checked'] else "체크되지 않음 ✗"
         print(f"{box['number']}: {status} (흰색 비율: {box['white_ratio']:.3f})")
@@ -532,7 +558,7 @@ def writing_detect_and_save_frames(image, output_dir, template_path=None, templa
     print("=====================")
     
     # 디버깅을 위해 처리된 이미지 저장
-    cv2.imwrite(os.path.join(output_dir, 'debug_checkboxes.jpg'), image)
+    cv2.imwrite(os.path.join(output_dir, 'debug_checkboxes.jpg'), debug_checkbox_image)
     
     # 체크란 이미지 저장
     for i, box in enumerate(checkboxes, 1):
@@ -542,11 +568,11 @@ def writing_detect_and_save_frames(image, output_dir, template_path=None, templa
         
         try:
             # 체크란 영역이 이미지 범위를 벗어나지 않는지 확인
-            if (y-padding >= 0 and y+h+padding <= image.shape[0] and 
-                x-padding >= 0 and x+w+padding <= image.shape[1]):
+            if (y-padding >= 0 and y+h+padding <= checkbox_image.shape[0] and 
+                x-padding >= 0 and x+w+padding <= checkbox_image.shape[1]):
                 
-                # 체크란 영역 추출
-                checkbox = image[y-padding:y+h+padding, x-padding:x+w+padding]
+                # 체크란 영역 추출 (원본 이미지에서)
+                checkbox = checkbox_image[y-padding:y+h+padding, x-padding:x+w+padding]
                 
                 # 추출된 영역이 유효한지 확인
                 if checkbox is not None and checkbox.size > 0:
@@ -567,17 +593,23 @@ def writing_detect_and_save_frames(image, output_dir, template_path=None, templa
             print(f"체크란 {i} 저장 중 오류 발생: {e}")
             continue
     
-    # 유효한 프레임 필터링
+    # 유효한 프레임 필터링 (범위를 더 넓게 설정)
     valid_frames = []
     for x, y, w, h in all_frames:
-        # 프레임 크기 범위 내의 것만 선택
-        if (avg_width * 0.85 <= w <= avg_width * 1.15 and 
-            avg_height * 0.85 <= h <= avg_height * 1.15):
+        # 프레임 크기 범위를 더 넓게 설정 (0.7 ~ 1.3배)
+        if (avg_width * 0.7 <= w <= avg_width * 1.3 and 
+            avg_height * 0.7 <= h <= avg_height * 1.3):
             valid_frames.append((x, y, w, h))
     
-    # y 좌표로 행 그룹화
+    print(f"\n=== 프레임 필터링 결과 ===")
+    print(f"전체 감지된 프레임 수: {len(all_frames)}")
+    print(f"유효한 프레임 수: {len(valid_frames)}")
+    print(f"평균 프레임 크기: {avg_width:.0f} x {avg_height:.0f}")
+    print("=========================\n")
+    
+    # y 좌표로 행 그룹화 (허용 오차를 더 크게 설정)
     row_groups = {}
-    y_tolerance = avg_height * 0.3  # 같은 행으로 인식할 y좌표 차이
+    y_tolerance = avg_height * 0.5  # 같은 행으로 인식할 y좌표 차이를 더 크게
     
     for frame in valid_frames:
         x, y, w, h = frame
@@ -589,6 +621,15 @@ def writing_detect_and_save_frames(image, output_dir, template_path=None, templa
                 break
         if not assigned:
             row_groups[y] = [frame]
+    
+    # 행 그룹화 결과 출력
+    print(f"=== 행 그룹화 결과 (y_tolerance: {y_tolerance:.0f}) ===")
+    for i, row_y in enumerate(sorted(row_groups.keys()), 1):
+        frames_count = len(row_groups[row_y])
+        print(f"행 {i} (y={row_y:.0f}): {frames_count}개 프레임")
+        for j, (x, y, w, h) in enumerate(row_groups[row_y]):
+            print(f"  프레임 {j+1}: x={x}, y={y}, 크기={w}x{h}")
+    print("=" * 50)
     
     # 이미지 중간점 계산
     width = image.shape[1]
@@ -614,14 +655,28 @@ def writing_detect_and_save_frames(image, output_dir, template_path=None, templa
         # 프레임을 x 좌표 기준으로 정렬
         sorted_frames = sorted(row, key=lambda f: f[0])
         
+        print(f"\n--- 행 {row_idx} 처리 ---")
+        print(f"이 행의 총 프레임 수: {len(sorted_frames)}")
+        
         # 한 행의 6개 프레임을 왼쪽 3개, 오른쪽 3개로 나누기
         total_frames = len(sorted_frames)
         if total_frames > 0:
-            left_frames = sorted_frames[:min(3, total_frames//2)]
-            right_frames = sorted_frames[min(3, total_frames//2):min(6, total_frames)]
+            # 프레임이 6개 미만인 경우에도 적절히 분할
+            mid_point = total_frames // 2
+            left_frames = sorted_frames[:mid_point]
+            right_frames = sorted_frames[mid_point:]
+            
+            print(f"왼쪽 프레임 수: {len(left_frames)}, 오른쪽 프레임 수: {len(right_frames)}")
+            
+            # 각 프레임의 x 좌표 출력
+            for i, (x, y, w, h) in enumerate(left_frames):
+                print(f"  왼쪽 {i+1}: x={x}, y={y}")
+            for i, (x, y, w, h) in enumerate(right_frames):
+                print(f"  오른쪽 {i+1}: x={x}, y={y}")
         else:
             left_frames = []
             right_frames = []
+            print("이 행에는 프레임이 없습니다.")
         
         # 디버그 이미지 생성
         debug_frame_positions = image.copy()
