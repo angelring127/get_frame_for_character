@@ -284,12 +284,16 @@ def clean_frame_border(frame, is_edge=False):
     
     return frame
 
-def create_template_output(template_path, output_dir, template_name):
+def create_template_output(template_path, output_dir, template_name, frame_data=None):
     """
     템플릿 이미지에 프레임을 배치하여 출력합니다.
-    각 문제의 84개 이미지를 해당 문제의 시작 위치부터 순차적으로 배치합니다.
+    각 문제의 84개 이미지를 해당 문제의 시작 위치부터 위치 기반으로 배치합니다.
     템플릿 이미지는 5000x5000px 크기로 고정됩니다.
     프레임 크기: 130x130px, 간격: 20px
+    
+    Args:
+        frame_data: 프레임 정보 딕셔너리 (선택사항)
+                   형식: {answer_num: {question_num: {repeat_num: {box_num: frame_path}}}}
     """
     # 템플릿 이미지 로드
     template = cv2.imread(template_path)
@@ -320,20 +324,37 @@ def create_template_output(template_path, output_dir, template_name):
     start_x = (template.shape[1] - (cols * (frame_size))) // 2
     start_y = (template.shape[0] - (rows * (frame_size))) // 2
     
-    # 추출된 이미지 파일 목록 가져오기
-    extracted_files = []
-    for file in os.listdir(output_dir):
-        if file.startswith('answer') and file.endswith('.jpg') and 'checkbox' not in file and '_origin' not in file:
-            # 파일명에서 번호 추출
-            parts = file.replace('.jpg', '').split('_')
-            answer = int(parts[0].replace('answer', ''))
-            question = int(parts[1].replace('question', ''))
-            repeat = int(parts[2].replace('repeat', ''))
-            box = int(parts[3].replace('box', ''))
-            extracted_files.append((file, answer, question, repeat, box))
-    
-    # 파일 정렬: answer > question > repeat > box 순서
-    extracted_files.sort(key=lambda x: (x[1], x[2], x[3], x[4]))  # question은 1부터 7까지 오름차순
+    # 프레임 데이터 처리
+    if frame_data is not None:
+        # 직접 전달받은 프레임 데이터 사용
+        answer_files = frame_data
+        print("직접 전달받은 프레임 데이터를 사용합니다.")
+    else:
+        # 기존 방식: 파일 목록에서 추출
+        extracted_files = []
+        for file in os.listdir(output_dir):
+            if file.startswith('answer') and file.endswith('.jpg') and 'checkbox' not in file and '_origin' not in file:
+                # 파일명에서 번호 추출
+                parts = file.replace('.jpg', '').split('_')
+                answer = int(parts[0].replace('answer', ''))
+                question = int(parts[1].replace('question', ''))
+                repeat = int(parts[2].replace('repeat', ''))
+                box = int(parts[3].replace('box', ''))
+                extracted_files.append((file, answer, question, repeat, box))
+        
+        # 파일 정렬: answer > question > repeat > box 순서
+        extracted_files.sort(key=lambda x: (x[1], x[2], x[3], x[4]))  # question은 1부터 7까지 오름차순
+        
+        if not extracted_files:
+            raise ValueError("프레임 이미지를 찾을 수 없습니다.")
+        
+        # 각 answer 번호별로 파일 그룹화 (기존 방식)
+        answer_files = {}
+        for file_info in extracted_files:
+            answer = str(file_info[1])
+            if answer not in answer_files:
+                answer_files[answer] = []
+            answer_files[answer].append(file_info)
     
     # 문제 번호별 시작 위치 계산
     question_start_positions = {
@@ -343,70 +364,158 @@ def create_template_output(template_path, output_dir, template_name):
         4: (20, 28)   # 4번 문제: 17번째 줄, 28번째 칸부터
     }
     
-    # 선택된 문제 번호에 따른 시작 위치 설정
-    selected_number = int(extracted_files[0][1])  # 첫 번째 파일의 answer 번호 사용
-    start_row, start_col = question_start_positions.get(selected_number, (4, 0))
-    
-    # 프레임 위치 계산 (84개의 프레임을 시작 위치부터 순차적으로)
-    template_frames = []
-    frame_count = 0
-    current_row = start_row
-    current_col = start_col
-    
-    while frame_count < 84 and current_row < rows:
-        x = start_x + current_col * (frame_size)
-        y = start_y + current_row * (frame_size)
-        template_frames.append((x, y, frame_size, frame_size))
-        frame_count += 1
-        
-        # 다음 위치 계산
-        current_col += 2
-        if current_col >= cols:  # 열이 끝나면 다음 행으로
-            current_col = 0
-            current_row += 1
-    
-    # 프레임 배치
-    for i, file_info in enumerate(extracted_files):
-        if i >= len(template_frames):
-            break
+    # 각 answer 번호별로 프레임 배치
+    for answer_num in sorted(answer_files.keys()):
+        if int(answer_num) not in question_start_positions:
+            print(f"경고: 알 수 없는 답안 번호 {answer_num}는 건너뜁니다.")
+            continue
             
-        file_name = file_info[0]
-        frame_path = os.path.join(output_dir, file_name)
+        # 시작 위치 설정
+        start_row, start_col = question_start_positions[int(answer_num)]
+        print(f"\n답안 {answer_num} 프레임 배치 시작 [시작 위치: 행={start_row}, 열={start_col}]")
         
-        frame = cv2.imread(frame_path)
-        if frame is None:
-            print(f"프레임을 로드할 수 없습니다: {frame_path}")
-            continue
+        # 프레임 위치 계산 (84개의 프레임을 시작 위치부터 순차적으로)
+        template_frames = []
+        frame_count = 0
+        current_row = start_row
+        current_col = start_col
         
-        # 템플릿의 현재 프레임 위치
-        tx, ty, tw, th = template_frames[i]
+        while frame_count < 84 and current_row < rows:
+            x = start_x + current_col * (frame_size)
+            y = start_y + current_row * (frame_size)
+            template_frames.append((x, y, frame_size, frame_size, frame_count))
+            frame_count += 1
+            
+            # 다음 위치 계산
+            current_col += 2
+            if current_col >= cols:  # 열이 끝나면 다음 행으로
+                current_col = 0
+                current_row += 1
         
-        # 프레임 크기 조정 (비율 유지)
-        target_size = (tw-4, th-4)  # 여백을 위해 약간 작게
-        frame_ratio = frame.shape[1] / frame.shape[0]
-        target_ratio = target_size[0] / target_size[1]
-        
-        if frame_ratio > target_ratio:
-            new_width = target_size[0]
-            new_height = int(new_width / frame_ratio)
+        # 프레임 배치 - 위치 기반 방식 (누락 고려)
+        if frame_data is not None:
+            # 직접 전달받은 프레임 데이터 사용
+            answer_data = answer_files[answer_num]
+            
+            # 각 문제별로 정확한 템플릿 위치 계산
+            template_position = 0
+            
+            # 문제별로 처리 (7개 문제, 각 문제당 12개 위치)
+            for question_num in range(1, 8):  # 1부터 7까지 순서대로
+                # 각 repeat별로 처리 (3개 repeat, 각 repeat당 4개 위치)
+                for repeat_num in range(1, 4):  # 1부터 3까지
+                    for box_num in range(1, 5):  # 1부터 4까지
+                        if template_position >= len(template_frames):
+                            break
+                        
+                        # 해당 위치에 프레임이 있는지 확인
+                        frame_path = None
+                        
+                        if (question_num in answer_data and 
+                            repeat_num in answer_data[question_num] and 
+                            box_num in answer_data[question_num][repeat_num]):
+                            frame_path = answer_data[question_num][repeat_num][box_num]
+                        
+                        # 프레임이 있는 경우 배치
+                        if frame_path and template_position < len(template_frames):
+                            frame = cv2.imread(frame_path)
+                            if frame is not None and frame.size > 0:
+                                # 템플릿의 해당 위치
+                                tx, ty, tw, th, template_idx = template_frames[template_position]
+                                
+                                # 프레임 크기 조정 (비율 유지)
+                                target_size = (tw-4, th-4)  # 여백을 위해 약간 작게
+                                frame_ratio = frame.shape[1] / frame.shape[0]
+                                target_ratio = target_size[0] / target_size[1]
+                                
+                                if frame_ratio > target_ratio:
+                                    new_width = target_size[0]
+                                    new_height = int(new_width / frame_ratio)
+                                else:
+                                    new_height = target_size[1]
+                                    new_width = int(new_height * frame_ratio)
+                                
+                                frame = cv2.resize(frame, (new_width, new_height))
+                                
+                                # 중앙 정렬을 위한 오프셋 계산
+                                x_offset = tx + 2 + (tw - new_width) // 2
+                                y_offset = ty + 2 + (th - new_height) // 2
+                                
+                                try:
+                                    # 출력 이미지 범위 체크
+                                    if (y_offset >= 0 and y_offset + new_height <= output.shape[0] and
+                                        x_offset >= 0 and x_offset + new_width <= output.shape[1]):
+                                        output[y_offset:y_offset+new_height, x_offset:x_offset+new_width] = frame
+                                        print(f"프레임 배치: {os.path.basename(frame_path)} -> 템플릿 위치 {template_position} (문제:{question_num}, 반복:{repeat_num}, 상자:{box_num})")
+                                    else:
+                                        print(f"프레임 배치 실패: 범위를 벗어남 - {os.path.basename(frame_path)}")
+                                except ValueError as e:
+                                    print(f"프레임 배치 오류: {e}")
+                            else:
+                                print(f"프레임 로드 실패: {frame_path}")
+                        else:
+                            # 프레임이 없는 경우 빈 공간으로 남김
+                            print(f"빈 공간: 템플릿 위치 {template_position} (문제:{question_num}, 반복:{repeat_num}, 상자:{box_num}) - 프레임 없음")
+                        
+                        template_position += 1
+                    
+                    if template_position >= len(template_frames):
+                        break
+                
+                if template_position >= len(template_frames):
+                    break
         else:
-            new_height = target_size[1]
-            new_width = int(new_height * frame_ratio)
-        
-        frame = cv2.resize(frame, (new_width, new_height))
-        
-        # 중앙 정렬을 위한 오프셋 계산
-        x_offset = tx + 2 + (tw - new_width) // 2
-        y_offset = ty + 2 + (th - new_height) // 2
-        
-        try:
-            output[y_offset:y_offset+new_height, x_offset:x_offset+new_width] = frame
-            row_num = (i // (cols - start_col)) + start_row if i == 0 else (i // cols) + start_row
-            col_num = (i % (cols - start_col)) + start_col if i == 0 else i % cols
-            print(f"프레임 배치: {file_name} -> ({x_offset}, {y_offset}) [행:{row_num}, 열:{col_num}]")
-        except ValueError as e:
-            print(f"프레임 배치 오류: {e}")
-            continue
+            # 기존 방식: 파일 목록 기반
+            files = answer_files[answer_num]
+            for i, file_info in enumerate(files):
+                if i >= len(template_frames):
+                    break
+                    
+                file_name = file_info[0]
+                frame_path = os.path.join(output_dir, file_name)
+                
+                frame = cv2.imread(frame_path)
+                if frame is None:
+                    print(f"프레임을 로드할 수 없습니다: {frame_path}")
+                    continue
+                
+                # 프레임 유효성 검사
+                if frame.size == 0:
+                    print(f"프레임이 비어있습니다: {frame_path}")
+                    continue
+                    
+                # 템플릿의 현재 프레임 위치
+                tx, ty, tw, th, template_idx = template_frames[i]
+                
+                # 프레임 크기 조정 (비율 유지)
+                target_size = (tw-4, th-4)  # 여백을 위해 약간 작게
+                frame_ratio = frame.shape[1] / frame.shape[0]
+                target_ratio = target_size[0] / target_size[1]
+                
+                if frame_ratio > target_ratio:
+                    new_width = target_size[0]
+                    new_height = int(new_width / frame_ratio)
+                else:
+                    new_height = target_size[1]
+                    new_width = int(new_height * frame_ratio)
+                
+                frame = cv2.resize(frame, (new_width, new_height))
+                
+                # 중앙 정렬을 위한 오프셋 계산
+                x_offset = tx + 2 + (tw - new_width) // 2
+                y_offset = ty + 2 + (th - new_height) // 2
+                
+                try:
+                    # 출력 이미지 범위 체크
+                    if (y_offset >= 0 and y_offset + new_height <= output.shape[0] and
+                        x_offset >= 0 and x_offset + new_width <= output.shape[1]):
+                        output[y_offset:y_offset+new_height, x_offset:x_offset+new_width] = frame
+                        print(f"프레임 배치: {file_name} -> 템플릿 위치 {template_idx}")
+                    else:
+                        print(f"프레임 배치 실패: 범위를 벗어남 - {file_name}")
+                except ValueError as e:
+                    print(f"프레임 배치 오류: {e}")
+                    continue
     
     # 결과 이미지 저장 (output 디렉토리에 저장)
     output_path = os.path.join("output", f"{template_name}.jpg")
@@ -875,8 +984,52 @@ def reading_detect_and_save_frames(image, output_dir, template_path=None, templa
         if os.path.exists(output_template_path):
             print(f"템플릿 파일을 output 디렉토리에서 찾았습니다: {output_template_path}")
             template_path = output_template_path
+        
+        # 프레임 데이터 수집
+        frame_data = {}
+        
+        # 선택된 답안 번호로 프레임 데이터 구성
+        print(f"선택된 답안: {selected_number}")
+        
+        # 답안 데이터 구성
+        if selected_number in ['1', '2', '3', '4']:
+            frame_data[selected_number] = {}
             
-        create_template_output(template_path, output_dir, template_name)
+            # 7개 문제별로 처리
+            for question_num in range(1, 8):  # 1부터 7까지 순서대로
+                question_data = {}
+                
+                # 3개 repeat별로 처리
+                for repeat_num in range(1, 4):  # 1부터 3까지
+                    repeat_data = {}
+                    
+                    # 4개 box별로 처리
+                    for box_num in range(1, 5):  # 1부터 4까지
+                        frame_name = f"answer{selected_number}_question{question_num}_repeat{repeat_num}_box{box_num}.jpg"
+                        frame_path = os.path.join(output_dir, frame_name)
+                        if os.path.exists(frame_path):
+                            repeat_data[box_num] = frame_path
+                            print(f"프레임 추가: 문제{question_num}, 반복{repeat_num}, 상자{box_num} -> {frame_name}")
+                    
+                    # repeat에 프레임이 있는 경우만 추가
+                    if repeat_data:
+                        question_data[repeat_num] = repeat_data
+                
+                # 문제에 프레임이 있는 경우만 추가
+                if question_data:
+                    frame_data[selected_number][question_num] = question_data
+        
+        print(f"\n=== 템플릿 출력용 프레임 데이터 ===")
+        for answer_num, answer_data in frame_data.items():
+            print(f"답안 {answer_num}: {len(answer_data)}개 문제")
+            for question_num, question_data in answer_data.items():
+                print(f"  문제 {question_num}: {len(question_data)}개 반복")
+                for repeat_num, repeat_data in question_data.items():
+                    print(f"    반복 {repeat_num}: 상자 {list(repeat_data.keys())}")
+        print("=" * 40)
+        
+        # 개선된 템플릿 출력 함수 호출
+        create_template_output(template_path, output_dir, template_name, frame_data)
     
     print(f"\n총 추출된 프레임 수: {len(valid_frames)}/84")
     if len(valid_frames) < 84:
