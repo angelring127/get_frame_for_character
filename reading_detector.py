@@ -952,8 +952,10 @@ def reading_detect_and_save_frames(image, output_dir, template_path=None, templa
             cv2.putText(debug_rows, f"row={row_idx}", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
     cv2.imwrite(os.path.join(output_dir, 'debug_row_groups.jpg'), debug_rows)
 
-    # 프레임 그리드 시각화
+    # 프레임 그리드 시각화 및 통합 프레임 위치 수집
     debug_grid = image.copy()
+    all_frame_positions = []  # 통합 디버그 이미지를 위한 프레임 정보 수집
+    
     for row in range(n_rows):
         for col in range(n_cols):
             frame = frame_grid[row][col]
@@ -961,6 +963,13 @@ def reading_detect_and_save_frames(image, output_dir, template_path=None, templa
                 x, y, w, h = frame
                 cv2.rectangle(debug_grid, (x, y), (x+w, y+h), (0, 255, 0), 2)
                 cv2.putText(debug_grid, f"({row},{col})", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                
+                # 통합 디버그를 위한 프레임 정보 추가
+                question_num = 7 - col  # 7부터 1까지 역순
+                repeat_num = (row // 4) + 1
+                box_num = (row % 4) + 1
+                label = f"Q{question_num}-R{repeat_num}-B{box_num}"
+                all_frame_positions.append((x, y, w, h, label))
             else:
                 # 누락된 프레임 위치 표시 (평균 위치 사용)
                 if row in row_groups and col in col_map.values():
@@ -974,6 +983,44 @@ def reading_detect_and_save_frames(image, output_dir, template_path=None, templa
                               (x_mean, y_mean-10), 
                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
     cv2.imwrite(os.path.join(output_dir, 'debug_frame_grid.jpg'), debug_grid)
+    
+    # 원본 이미지 한 장에 모든 프레임 표시
+    if all_frame_positions:
+        print(f"\n=== 통합 프레임 위치 표시 ===")
+        
+        # 원본 이미지 복사
+        combined_debug = image.copy()
+        
+        # 이미지가 그레이스케일인 경우 컬러로 변환
+        if len(combined_debug.shape) == 2:
+            combined_debug = cv2.cvtColor(combined_debug, cv2.COLOR_GRAY2BGR)
+        
+        # 모든 프레임 위치 표시
+        for x, y, w, h, label in all_frame_positions:
+            # 프레임 사각형 그리기 (녹색)
+            cv2.rectangle(combined_debug, (x, y), (x+w, y+h), (0, 255, 0), 2)
+            
+            # 라벨 텍스트 표시
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 0.6
+            font_thickness = 2
+            text_size = cv2.getTextSize(label, font, font_scale, font_thickness)[0]
+            
+            # 텍스트 배경 (검은색)
+            cv2.rectangle(combined_debug, (x, y-25), (x+text_size[0]+10, y-5), (0, 0, 0), -1)
+            # 텍스트 (흰색)
+            cv2.putText(combined_debug, label, (x+5, y-10), font, font_scale, (255, 255, 255), font_thickness)
+        
+        # 통합 프레임 위치 이미지 저장
+        combined_path = os.path.join(output_dir, 'debug_all_frame_positions.jpg')
+        try:
+            cv2.imwrite(combined_path, combined_debug)
+            print(f"통합 프레임 위치 이미지 저장됨: {combined_path}")
+            print(f"총 {len(all_frame_positions)}개 프레임 표시")
+        except cv2.error as e:
+            print(f"통합 프레임 위치 이미지 저장 중 오류: {e}")
+        
+        print("=" * 40)
 
     # 템플릿 이미지가 제공된 경우 템플릿 출력 생성
     if template_path and template_name:
