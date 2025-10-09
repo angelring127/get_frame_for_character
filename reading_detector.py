@@ -514,8 +514,9 @@ def create_template_output(template_path, output_dir, template_name, frame_data=
         template_frames = {}
         
         for question_num in range(1, 8):  # 7개 question
-            # 각 question의 시작 열 계산 (정순: question 1이 왼쪽, question 7이 오른쪽)
-            question_col_start = (question_num - 1) * 5  # 5 = 4칸 합침 + 1칸 빈칸
+            # 각 question의 시작 열 계산 (역순: question 1을 왼쪽에 배치)
+            # 실제 이미지는 오른쪽에 question 1이 있으므로, 템플릿에서는 역순으로 배치
+            question_col_start = (7 - question_num) * 5  # 5 = 4칸 합침 + 1칸 빈칸
             
             for repeat_num in range(1, 4):  # 3개 repeat
                 repeat_row = start_row + (repeat_num - 1)  # 각 repeat는 한 줄씩
@@ -1153,7 +1154,7 @@ def reading_detect_and_save_frames(image, output_dir, template_path=None, templa
     saved_frames = []
     total_frames = 0
     for col in range(n_cols):  # 7개 열 (0-6)
-        question_num = col + 1  # 1부터 7까지 정순
+        question_num = 7 - col  # 오른쪽(col 6)이 question 1, 왼쪽(col 0)이 question 7
         for row in range(n_rows):  # 12개 행 (0-11)
             frame = frame_grid[row][col]
             if frame is None:
@@ -1182,7 +1183,7 @@ def reading_detect_and_save_frames(image, output_dir, template_path=None, templa
 
     # === 누락된 프레임 보정(추가 탐색) 루프 복원 ===
     for col in range(n_cols):
-        question_num = col + 1  # 1부터 7까지 정순
+        question_num = 7 - col  # 오른쪽(col 6)이 question 1, 왼쪽(col 0)이 question 7
         for row in range(n_rows):
             frame = frame_grid[row][col]
             if frame is not None:
@@ -1253,7 +1254,7 @@ def reading_detect_and_save_frames(image, output_dir, template_path=None, templa
                 cv2.putText(debug_grid, f"({row},{col})", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
                 
                 # 통합 디버그를 위한 프레임 정보 추가
-                question_num = col + 1  # 1부터 7까지 정순
+                question_num = 7 - col  # 오른쪽(col 6)이 question 1, 왼쪽(col 0)이 question 7
                 repeat_num = (row // 4) + 1
                 box_num = (row % 4) + 1
                 label = f"Q{question_num}-R{repeat_num}-B{box_num}"
