@@ -284,6 +284,139 @@ def clean_frame_border(frame, is_edge=False):
     
     return frame
 
+def analyze_character_size(frame):
+    """
+    프레임 이미지에서 문자 영역의 크기를 분석합니다.
+    히라가나의 점(濁点, 半濁点)을 포함한 전체 문자 영역을 감지합니다.
+    
+    Args:
+        frame: 분석할 프레임 이미지
+        
+    Returns:
+        tuple: (문자_영역_크기, 문자_영역_좌표)
+    """
+    if frame is None or frame.size == 0:
+        return None, None
+    
+    # 그레이스케일 변환
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    
+    # 적응형 이진화로 문자 영역 강조 (히라가나의 작은 점들도 감지하도록 조정)
+    binary = cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV, 7, 2  # 블록 크기를 줄여서 작은 점들도 감지
+    )
+    
+    # 작은 점들도 보존하기 위해 약한 모폴로지 연산 적용
+    kernel = np.ones((1,1), np.uint8)  # 최소한의 노이즈 제거만
+    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
+    
+    # 윤곽선 찾기
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    if not contours:
+        return None, None
+    
+    # 모든 윤곽선을 포함하는 전체 바운딩 박스 계산
+    all_points = []
+    for contour in contours:
+        # 작은 노이즈 제거 (면적이 너무 작은 윤곽선 제외)
+        if cv2.contourArea(contour) > 10:  # 최소 면적 임계값
+            all_points.extend(contour.reshape(-1, 2))
+    
+    if not all_points:
+        return None, None
+    
+    # 모든 점들을 포함하는 바운딩 박스 계산
+    all_points = np.array(all_points)
+    x = int(np.min(all_points[:, 0]))
+    y = int(np.min(all_points[:, 1]))
+    w = int(np.max(all_points[:, 0]) - x)
+    h = int(np.max(all_points[:, 1]) - y)
+    
+    # 문자 영역 크기 계산
+    character_area = w * h
+    character_bbox = (x, y, w, h)
+    
+    return character_area, character_bbox
+
+def adjust_character_size(frame, target_size_ratio=1.0):
+    """
+    문자 크기를 조정합니다. 히라가나의 점들을 보존하며 프레임 밖으로 나가지 않도록 조정합니다.
+    
+    Args:
+        frame: 조정할 프레임 이미지
+        target_size_ratio: 목표 크기 비율 (1.0 = 원본 크기)
+        
+    Returns:
+        numpy.ndarray: 크기 조정된 프레임 이미지
+    """
+    if frame is None or frame.size == 0:
+        return frame
+    
+    # 문자 영역 분석
+    character_area, character_bbox = analyze_character_size(frame)
+    
+    if character_area is None or character_bbox is None:
+        return frame
+    
+    x, y, w, h = character_bbox
+    
+    # 히라가나의 점들을 보존하기 위해 충분한 여백 확보
+    padding = max(8, min(w, h) // 4)  # 문자 크기에 비례한 여백
+    x_start = max(0, x - padding)
+    y_start = max(0, y - padding)
+    x_end = min(frame.shape[1], x + w + padding)
+    y_end = min(frame.shape[0], y + h + padding)
+    
+    cropped_character = frame[y_start:y_end, x_start:x_end]
+    
+    if cropped_character.size == 0:
+        return frame
+    
+    # 크기 조정
+    if target_size_ratio != 1.0:
+        new_width = int(cropped_character.shape[1] * target_size_ratio)
+        new_height = int(cropped_character.shape[0] * target_size_ratio)
+        
+        # 프레임 크기 제한 (점들이 프레임 밖으로 나가지 않도록)
+        max_width = int(frame.shape[1] * 0.8)  # 프레임 너비의 80%
+        max_height = int(frame.shape[0] * 0.8)  # 프레임 높이의 80%
+        
+        if new_width > max_width:
+            new_height = int(new_height * max_width / new_width)
+            new_width = max_width
+        
+        if new_height > max_height:
+            new_width = int(new_width * max_height / new_height)
+            new_height = max_height
+        
+        # 크기 조정
+        resized_character = cv2.resize(cropped_character, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
+        
+        # 원본 프레임 복사
+        result_frame = frame.copy()
+        
+        # 기존 문자 영역을 흰색으로 지우기 (겹침 방지)
+        cv2.rectangle(result_frame, (x_start, y_start), (x_end, y_end), (255, 255, 255), -1)
+        
+        # 중앙 정렬을 위한 오프셋 계산
+        center_x = frame.shape[1] // 2
+        center_y = frame.shape[0] // 2
+        
+        start_x = max(0, center_x - new_width // 2)
+        start_y = max(0, center_y - new_height // 2)
+        end_x = min(frame.shape[1], start_x + new_width)
+        end_y = min(frame.shape[0], start_y + new_height)
+        
+        # 조정된 문자 영역을 원본 프레임에 배치
+        if end_x > start_x and end_y > start_y:
+            result_frame[start_y:end_y, start_x:end_x] = resized_character[:end_y-start_y, :end_x-start_x]
+        
+        return result_frame
+    
+    return frame
+
 def create_template_output(template_path, output_dir, template_name, frame_data=None):
     """
     템플릿 이미지에 프레임을 배치하여 출력합니다.
@@ -358,10 +491,10 @@ def create_template_output(template_path, output_dir, template_name, frame_data=
     
     # 문제 번호별 시작 위치 계산
     question_start_positions = {
-        1: (6, 0),    # 1번 문제: 5번째 줄, 1번째 칸부터
-        2: (10, 32),   # 2번 문제: 9번째 줄, 32번째 칸부터
-        3: (15, 30),  # 3번 문제: 13번째 줄, 30번째 칸부터
-        4: (20, 28)   # 4번 문제: 17번째 줄, 28번째 칸부터
+        1: (6, 0),    # 1번 문제: 6번째 줄, 1번째 칸부터
+        2: (9, 0),   # 2번 문제: 10번째 줄, 32번째 칸부터
+        3: (12, 0),  # 3번 문제: 15번째 줄, 30번째 칸부터
+        4: (15, 0)   # 4번 문제: 20번째 줄, 28번째 칸부터
     }
     
     # 각 answer 번호별로 프레임 배치
@@ -374,39 +507,80 @@ def create_template_output(template_path, output_dir, template_name, frame_data=
         start_row, start_col = question_start_positions[int(answer_num)]
         print(f"\n답안 {answer_num} 프레임 배치 시작 [시작 위치: 행={start_row}, 열={start_col}]")
         
-        # 프레임 위치 계산 (84개의 프레임을 시작 위치부터 순차적으로)
-        template_frames = []
-        frame_count = 0
-        current_row = start_row
-        current_col = start_col
+        # 작은 문자 확대 로직 제거 - 일본어 작은 글자는 원래 위치에 배치
         
-        while frame_count < 84 and current_row < rows:
-            x = start_x + current_col * (frame_size)
-            y = start_y + current_row * (frame_size)
-            template_frames.append((x, y, frame_size, frame_size, frame_count))
-            frame_count += 1
+        # 프레임 위치 계산 - 그룹 단위로 배치 (각 그룹은 4칸 합침 + 1칸 빈칸)
+        # 각 question별로 3개 repeat, 각 repeat의 4개 box를 가로로 배치
+        template_frames = {}
+        
+        for question_num in range(1, 8):  # 7개 question
+            # 각 question의 시작 열 계산 (역순: question 7이 왼쪽, question 1이 오른쪽)
+            question_col_start = (7 - question_num) * 5  # 5 = 4칸 합침 + 1칸 빈칸
             
-            # 다음 위치 계산
-            current_col += 2
-            if current_col >= cols:  # 열이 끝나면 다음 행으로
-                current_col = 0
-                current_row += 1
+            for repeat_num in range(1, 4):  # 3개 repeat
+                repeat_row = start_row + (repeat_num - 1)  # 각 repeat는 한 줄씩
+                
+                for box_num in range(1, 5):  # 4개 box
+                    box_col = question_col_start + (box_num - 1)  # 4개 box를 가로로 배치
+                    
+                    x = start_x + box_col * frame_size
+                    y = start_y + repeat_row * frame_size
+                    
+                    # 프레임 정보 저장 (question, repeat, box를 키로 사용)
+                    if question_num not in template_frames:
+                        template_frames[question_num] = {}
+                    if repeat_num not in template_frames[question_num]:
+                        template_frames[question_num][repeat_num] = {}
+                    
+                    template_frames[question_num][repeat_num][box_num] = (x, y, frame_size, frame_size)
         
-        # 프레임 배치 - 위치 기반 방식 (누락 고려)
+        # 프레임 배치 - 그룹 단위로 배치
         if frame_data is not None:
             # 직접 전달받은 프레임 데이터 사용
             answer_data = answer_files[answer_num]
             
-            # 각 문제별로 정확한 템플릿 위치 계산
-            template_position = 0
-            
-            # 문제별로 처리 (7개 문제, 각 문제당 12개 위치)
-            for question_num in range(1, 8):  # 1부터 7까지 순서대로
-                # 각 repeat별로 처리 (3개 repeat, 각 repeat당 4개 위치)
+            # 각 question별로 처리
+            for question_num in range(1, 8):  # 1부터 7까지
+                if question_num not in template_frames:
+                    continue
+                    
+                # 각 repeat별로 처리
                 for repeat_num in range(1, 4):  # 1부터 3까지
+                    if repeat_num not in template_frames[question_num]:
+                        continue
+                    
+                    # 현재 repeat의 모든 box에 대해 작은 글자 분석
+                    box_sizes = {}
+                    valid_sizes = []  # 실제 글자가 있는 것만 저장
+                    for box_num in range(1, 5):
+                        if box_num not in template_frames[question_num][repeat_num]:
+                            continue
+                        if (question_num in answer_data and 
+                            repeat_num in answer_data[question_num] and 
+                            box_num in answer_data[question_num][repeat_num]):
+                            frame_path = answer_data[question_num][repeat_num][box_num]
+                            temp_frame = cv2.imread(frame_path)
+                            if temp_frame is not None:
+                                character_area, _ = analyze_character_size(temp_frame)
+                                # 실제 문자가 있는 경우만 저장 (0이 아닌 경우)
+                                if character_area and character_area > 0:
+                                    box_sizes[box_num] = character_area
+                                    valid_sizes.append(character_area)
+                                else:
+                                    # 빈 프레임은 0으로 표시하여 작은 글자로 인식되지 않도록
+                                    box_sizes[box_num] = 0
+                    
+                    # 평균 크기 계산하여 작은 글자 판별 기준 설정 (실제 글자만 포함)
+                    if valid_sizes and len(valid_sizes) > 0:
+                        avg_size = np.mean(valid_sizes)
+                        small_char_threshold = avg_size * 0.65  # 평균의 65% 이하면 작은 글자로 판단
+                    else:
+                        small_char_threshold = 0
+                        
+                    # 각 box별로 처리
                     for box_num in range(1, 5):  # 1부터 4까지
-                        if template_position >= len(template_frames):
-                            break
+                        if box_num not in template_frames[question_num][repeat_num]:
+                            continue
                         
                         # 해당 위치에 프레임이 있는지 확인
                         frame_path = None
@@ -417,11 +591,17 @@ def create_template_output(template_path, output_dir, template_name, frame_data=
                             frame_path = answer_data[question_num][repeat_num][box_num]
                         
                         # 프레임이 있는 경우 배치
-                        if frame_path and template_position < len(template_frames):
+                        if frame_path:
                             frame = cv2.imread(frame_path)
                             if frame is not None and frame.size > 0:
                                 # 템플릿의 해당 위치
-                                tx, ty, tw, th, template_idx = template_frames[template_position]
+                                tx, ty, tw, th = template_frames[question_num][repeat_num][box_num]
+                                
+                                # 작은 글자 여부 판별 (실제 글자가 있고, 평균의 65% 이하일 때만)
+                                is_small_char = (box_num in box_sizes and 
+                                               box_sizes[box_num] > 0 and 
+                                               small_char_threshold > 0 and
+                                               box_sizes[box_num] < small_char_threshold)
                                 
                                 # 프레임 크기 조정 (비율 유지)
                                 target_size = (tw-4, th-4)  # 여백을 위해 약간 작게
@@ -437,16 +617,48 @@ def create_template_output(template_path, output_dir, template_name, frame_data=
                                 
                                 frame = cv2.resize(frame, (new_width, new_height))
                                 
+                                # 첫 글자가 아닌 경우 문자 영역만 크롭
+                                if box_num > 1:
+                                    char_area, char_bbox = analyze_character_size(frame)
+                                    if char_bbox is not None:
+                                        cx, cy, cw, ch = char_bbox
+                                        # 약간의 여백을 포함하여 크롭
+                                        padding = 5
+                                        cx = max(0, cx - padding)
+                                        cy = max(0, cy - padding)
+                                        cw = min(frame.shape[1] - cx, cw + 2*padding)
+                                        ch = min(frame.shape[0] - cy, ch + 2*padding)
+                                        
+                                        # 문자 영역만 크롭 (축소 없이 원본 크기 유지)
+                                        cropped_char = frame[cy:cy+ch, cx:cx+cw]
+                                        frame = cropped_char
+                                        new_width = cw
+                                        new_height = ch
+                                        
+                                        if is_small_char:
+                                            print(f"작은 글자 크롭: {os.path.basename(frame_path)} (크기: {box_sizes.get(box_num, 0):.0f})")
+                                        else:
+                                            print(f"일반 글자 크롭: {os.path.basename(frame_path)}")
+                                
                                 # 중앙 정렬을 위한 오프셋 계산
                                 x_offset = tx + 2 + (tw - new_width) // 2
                                 y_offset = ty + 2 + (th - new_height) // 2
+                                
+                                # 첫 글자가 아닌 경우 왼쪽으로 이동하여 이전 글자와 가깝게
+                                if box_num > 1:
+                                    if is_small_char:
+                                        # 작은 글자는 더 왼쪽으로 이동
+                                        x_offset -= int(tw * 0.35)
+                                    else:
+                                        # 일반 글자는 적당히 왼쪽으로 이동
+                                        x_offset -= int(tw * 0.25)
                                 
                                 try:
                                     # 출력 이미지 범위 체크
                                     if (y_offset >= 0 and y_offset + new_height <= output.shape[0] and
                                         x_offset >= 0 and x_offset + new_width <= output.shape[1]):
                                         output[y_offset:y_offset+new_height, x_offset:x_offset+new_width] = frame
-                                        print(f"프레임 배치: {os.path.basename(frame_path)} -> 템플릿 위치 {template_position} (문제:{question_num}, 반복:{repeat_num}, 상자:{box_num})")
+                                        print(f"프레임 배치: {os.path.basename(frame_path)} -> 문제:{question_num}, 반복:{repeat_num}, 상자:{box_num}")
                                     else:
                                         print(f"프레임 배치 실패: 범위를 벗어남 - {os.path.basename(frame_path)}")
                                 except ValueError as e:
@@ -455,67 +667,143 @@ def create_template_output(template_path, output_dir, template_name, frame_data=
                                 print(f"프레임 로드 실패: {frame_path}")
                         else:
                             # 프레임이 없는 경우 빈 공간으로 남김
-                            print(f"빈 공간: 템플릿 위치 {template_position} (문제:{question_num}, 반복:{repeat_num}, 상자:{box_num}) - 프레임 없음")
-                        
-                        template_position += 1
-                    
-                    if template_position >= len(template_frames):
-                        break
-                
-                if template_position >= len(template_frames):
-                    break
+                            print(f"빈 공간: 문제:{question_num}, 반복:{repeat_num}, 상자:{box_num} - 프레임 없음")
         else:
             # 기존 방식: 파일 목록 기반
             files = answer_files[answer_num]
-            for i, file_info in enumerate(files):
-                if i >= len(template_frames):
-                    break
-                    
-                file_name = file_info[0]
-                frame_path = os.path.join(output_dir, file_name)
+            
+            # repeat별로 그룹화하여 작은 글자 분석
+            repeat_groups = {}
+            for file_info in files:
+                repeat = file_info[3]
+                if repeat not in repeat_groups:
+                    repeat_groups[repeat] = []
+                repeat_groups[repeat].append(file_info)
+            
+            # 각 repeat 그룹별로 처리
+            for repeat, repeat_files in repeat_groups.items():
+                # 현재 repeat의 모든 box에 대해 작은 글자 분석
+                box_sizes = {}
+                valid_sizes = []  # 실제 글자가 있는 것만 저장
+                for file_info in repeat_files:
+                    file_name = file_info[0]
+                    box = file_info[4]
+                    frame_path = os.path.join(output_dir, file_name)
+                    temp_frame = cv2.imread(frame_path)
+                    if temp_frame is not None:
+                        character_area, _ = analyze_character_size(temp_frame)
+                        # 실제 문자가 있는 경우만 저장 (0이 아닌 경우)
+                        if character_area and character_area > 0:
+                            box_sizes[box] = character_area
+                            valid_sizes.append(character_area)
+                        else:
+                            # 빈 프레임은 0으로 표시하여 작은 글자로 인식되지 않도록
+                            box_sizes[box] = 0
                 
-                frame = cv2.imread(frame_path)
-                if frame is None:
-                    print(f"프레임을 로드할 수 없습니다: {frame_path}")
-                    continue
-                
-                # 프레임 유효성 검사
-                if frame.size == 0:
-                    print(f"프레임이 비어있습니다: {frame_path}")
-                    continue
-                    
-                # 템플릿의 현재 프레임 위치
-                tx, ty, tw, th, template_idx = template_frames[i]
-                
-                # 프레임 크기 조정 (비율 유지)
-                target_size = (tw-4, th-4)  # 여백을 위해 약간 작게
-                frame_ratio = frame.shape[1] / frame.shape[0]
-                target_ratio = target_size[0] / target_size[1]
-                
-                if frame_ratio > target_ratio:
-                    new_width = target_size[0]
-                    new_height = int(new_width / frame_ratio)
+                # 평균 크기 계산하여 작은 글자 판별 기준 설정 (실제 글자만 포함)
+                if valid_sizes and len(valid_sizes) > 0:
+                    avg_size = np.mean(valid_sizes)
+                    small_char_threshold = avg_size * 0.65  # 평균의 65% 이하면 작은 글자로 판단
                 else:
-                    new_height = target_size[1]
-                    new_width = int(new_height * frame_ratio)
+                    small_char_threshold = 0
                 
-                frame = cv2.resize(frame, (new_width, new_height))
-                
-                # 중앙 정렬을 위한 오프셋 계산
-                x_offset = tx + 2 + (tw - new_width) // 2
-                y_offset = ty + 2 + (th - new_height) // 2
-                
-                try:
-                    # 출력 이미지 범위 체크
-                    if (y_offset >= 0 and y_offset + new_height <= output.shape[0] and
-                        x_offset >= 0 and x_offset + new_width <= output.shape[1]):
-                        output[y_offset:y_offset+new_height, x_offset:x_offset+new_width] = frame
-                        print(f"프레임 배치: {file_name} -> 템플릿 위치 {template_idx}")
+                # 각 파일 처리
+                for file_info in repeat_files:
+                    file_name = file_info[0]
+                    answer = file_info[1]
+                    question = file_info[2]
+                    repeat = file_info[3]
+                    box = file_info[4]
+                    
+                    # 템플릿 위치 확인
+                    if (question not in template_frames or
+                        repeat not in template_frames[question] or
+                        box not in template_frames[question][repeat]):
+                        print(f"템플릿 위치를 찾을 수 없음: 문제:{question}, 반복:{repeat}, 상자:{box}")
+                        continue
+                    
+                    frame_path = os.path.join(output_dir, file_name)
+                    frame = cv2.imread(frame_path)
+                    
+                    if frame is None:
+                        print(f"프레임을 로드할 수 없습니다: {frame_path}")
+                        continue
+                    
+                    # 프레임 유효성 검사
+                    if frame.size == 0:
+                        print(f"프레임이 비어있습니다: {frame_path}")
+                        continue
+                    
+                    # 템플릿의 해당 위치
+                    tx, ty, tw, th = template_frames[question][repeat][box]
+                    
+                    # 작은 글자 여부 판별 (실제 글자가 있고, 평균의 65% 이하일 때만)
+                    is_small_char = (box in box_sizes and 
+                                   box_sizes[box] > 0 and 
+                                   small_char_threshold > 0 and
+                                   box_sizes[box] < small_char_threshold)
+                    
+                    # 프레임 크기 조정 (비율 유지)
+                    target_size = (tw-4, th-4)  # 여백을 위해 약간 작게
+                    frame_ratio = frame.shape[1] / frame.shape[0]
+                    target_ratio = target_size[0] / target_size[1]
+                    
+                    if frame_ratio > target_ratio:
+                        new_width = target_size[0]
+                        new_height = int(new_width / frame_ratio)
                     else:
-                        print(f"프레임 배치 실패: 범위를 벗어남 - {file_name}")
-                except ValueError as e:
-                    print(f"프레임 배치 오류: {e}")
-                    continue
+                        new_height = target_size[1]
+                        new_width = int(new_height * frame_ratio)
+                    
+                    frame = cv2.resize(frame, (new_width, new_height))
+                    
+                    # 첫 글자가 아닌 경우 문자 영역만 크롭
+                    if box > 1:
+                        char_area, char_bbox = analyze_character_size(frame)
+                        if char_bbox is not None:
+                            cx, cy, cw, ch = char_bbox
+                            # 약간의 여백을 포함하여 크롭
+                            padding = 5
+                            cx = max(0, cx - padding)
+                            cy = max(0, cy - padding)
+                            cw = min(frame.shape[1] - cx, cw + 2*padding)
+                            ch = min(frame.shape[0] - cy, ch + 2*padding)
+                            
+                            # 문자 영역만 크롭 (축소 없이 원본 크기 유지)
+                            cropped_char = frame[cy:cy+ch, cx:cx+cw]
+                            frame = cropped_char
+                            new_width = cw
+                            new_height = ch
+                            
+                            if is_small_char:
+                                print(f"작은 글자 크롭: {file_name} (크기: {box_sizes.get(box, 0):.0f})")
+                            else:
+                                print(f"일반 글자 크롭: {file_name}")
+                    
+                    # 중앙 정렬을 위한 오프셋 계산
+                    x_offset = tx + 2 + (tw - new_width) // 2
+                    y_offset = ty + 2 + (th - new_height) // 2
+                    
+                    # 첫 글자가 아닌 경우 왼쪽으로 이동하여 이전 글자와 가깝게
+                    if box > 1:
+                        if is_small_char:
+                            # 작은 글자는 더 왼쪽으로 이동
+                            x_offset -= int(tw * 0.35)
+                        else:
+                            # 일반 글자는 적당히 왼쪽으로 이동
+                            x_offset -= int(tw * 0.25)
+                    
+                    try:
+                        # 출력 이미지 범위 체크
+                        if (y_offset >= 0 and y_offset + new_height <= output.shape[0] and
+                            x_offset >= 0 and x_offset + new_width <= output.shape[1]):
+                            output[y_offset:y_offset+new_height, x_offset:x_offset+new_width] = frame
+                            print(f"프레임 배치: {file_name} -> 문제:{question}, 반복:{repeat}, 상자:{box}")
+                        else:
+                            print(f"프레임 배치 실패: 범위를 벗어남 - {file_name}")
+                    except ValueError as e:
+                        print(f"프레임 배치 오류: {e}")
+                        continue
     
     # 결과 이미지 저장 (output 디렉토리에 저장)
     output_path = os.path.join("output", f"{template_name}.jpg")
