@@ -514,9 +514,9 @@ def create_template_output(template_path, output_dir, template_name, frame_data=
         template_frames = {}
         
         for question_num in range(1, 8):  # 7개 question
-            # 각 question의 시작 열 계산 (역순: question 1을 왼쪽에 배치)
-            # 실제 이미지는 오른쪽에 question 1이 있으므로, 템플릿에서는 역순으로 배치
-            question_col_start = (7 - question_num) * 5  # 5 = 4칸 합침 + 1칸 빈칸
+            # 각 question의 시작 열 계산 (정순: question 1을 왼쪽에 배치)
+            question_col_start = (question_num - 1) * 5  # 5 = 4칸 합침 + 1칸 빈칸
+            # question 1: col 0 (왼쪽), question 7: col 30 (오른쪽)
             
             for repeat_num in range(1, 4):  # 3개 repeat
                 repeat_row = start_row + (repeat_num - 1)  # 각 repeat는 한 줄씩
