@@ -2,6 +2,8 @@ import os
 import cv2
 from reading_detector import reading_detect_and_save_frames
 from writing_detector import writing_detect_and_save_frames
+from one_character_detector import one_character_detect_and_save_frame
+from four_character_detector import four_character_detect_and_save_frames
 from image_preprocessor import ImagePreprocessor
 
 def main(image_path, flag, template_name=None):
@@ -74,8 +76,12 @@ def main(image_path, flag, template_name=None):
             writing_detect_and_save_frames(processed_image, output_dir, template_path, template_name)
         elif flag == 2:
             reading_detect_and_save_frames(processed_image, output_dir, template_path, template_name)
+        elif flag == 3:
+            one_character_detect_and_save_frame(processed_image, output_dir, template_path, template_name)
+        elif flag == 4:
+            four_character_detect_and_save_frames(processed_image, output_dir, template_path, template_name)
         else:
-            print("잘못된 플래그 값입니다. 1(writing) 또는 2(reading)를 사용하세요.")
+            print("잘못된 플래그 값입니다. 1(writing), 2(reading), 3(one-character), 4(four-characters)를 사용하세요.")
             return
             
         print("처리가 완료되었습니다.")
@@ -89,7 +95,7 @@ if __name__ == "__main__":
     
     if len(sys.argv) < 3:
         print("사용법: python main.py <이미지_경로> <플래그> [템플릿_이름]")
-        print("플래그: 1=writing, 2=reading")
+        print("플래그: 1=writing, 2=reading, 3=one-character, 4=four-characters")
         sys.exit(1)
     
     image_path = sys.argv[1]
