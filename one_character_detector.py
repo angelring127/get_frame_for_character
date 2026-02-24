@@ -1,6 +1,7 @@
 import os
 import cv2
 import numpy as np
+from writing_detector import clean_frame_border
 
 
 def _detect_marked_question_repeat(image, output_dir):
@@ -142,31 +143,122 @@ def _find_largest_inner_frame(image):
     return best_rect
 
 
-def _create_template_output(frame_image, template_path, template_name):
+def _create_template_output(output_dir, template_path, template_name):
     if template_path is None:
         return
 
     template = cv2.imread(template_path)
     if template is None:
-        print(f"경고: 템플릿을 읽을 수 없어 템플릿 출력 생성을 건너뜁니다: {template_path}")
+        output_template_path = os.path.join("output", os.path.basename(template_path))
+        template = cv2.imread(output_template_path)
+        if template is None:
+            if os.path.basename(template_path) != "template.png":
+                template = cv2.imread("template.png")
+            if template is None:
+                print(
+                    "경고: 템플릿을 읽을 수 없어 템플릿 출력 생성을 건너뜁니다: "
+                    f"{template_path}"
+                )
+                return
+
+    template = cv2.resize(template, (5000, 5000))
+    output = template.copy()
+
+    frame_size = 130
+    rows = 33
+    cols = 34
+    start_x = (template.shape[1] - (cols * frame_size)) // 2
+    start_y = (template.shape[0] - (rows * frame_size)) // 2
+
+    extracted_files = []
+    for file in os.listdir(output_dir):
+        if not (file.startswith("frame_question") and file.endswith("_origin.jpg")):
+            continue
+        parts = file.replace("_origin.jpg", "").split("_")
+        if len(parts) < 4:
+            continue
+        question = parts[1].replace("question", "")
+        if len(question) == 1:
+            question = f"0{question}"
+        try:
+            repeat = int(parts[2])
+            box = int(parts[3])
+        except ValueError:
+            continue
+        extracted_files.append((file, question, repeat, box))
+
+    extracted_files.sort(key=lambda x: (x[1], x[2], x[3]))
+    if not extracted_files:
+        print("경고: 템플릿 출력용 프레임 파일이 없습니다.")
         return
 
-    rect = _find_largest_inner_frame(template)
-    if rect is None:
-        th, tw = template.shape[:2]
-        side = int(min(tw, th) * 0.7)
-        x = (tw - side) // 2
-        y = (th - side) // 2
-        rect = (x, y, side, side)
+    question_files = {}
+    for file_info in extracted_files:
+        question = file_info[1]
+        if question not in question_files:
+            question_files[question] = []
+        question_files[question].append(file_info)
 
-    x, y, w, h = rect
-    inner_pad = max(4, int(min(w, h) * 0.01))
-    tx0, ty0 = x + inner_pad, y + inner_pad
-    tw, th = max(1, w - inner_pad * 2), max(1, h - inner_pad * 2)
+    question_start_positions = {
+        "01": (1, 0),
+        "02": (2, 8),
+        "03": (3, 16),
+        "04": (4, 24),
+    }
 
-    resized = cv2.resize(frame_image, (tw, th))
-    output = template.copy()
-    output[ty0:ty0 + th, tx0:tx0 + tw] = resized
+    for question_num in sorted(question_files.keys()):
+        if question_num not in question_start_positions:
+            print(f"경고: 알 수 없는 문제 번호 {question_num}는 건너뜁니다.")
+            continue
+
+        q_start_row, q_start_col = question_start_positions[question_num]
+        template_frames = []
+        frame_count = 0
+        current_row = q_start_row
+        current_col = q_start_col
+        while frame_count < 21 and current_row < rows:
+            x = start_x + current_col * frame_size
+            y = start_y + current_row * frame_size
+            template_frames.append((x, y, frame_size, frame_size))
+            frame_count += 1
+            current_col += 2
+            if current_col >= cols:
+                current_col = 0
+                current_row += 1
+
+        question_entries = question_files[question_num]
+        max_box = max(entry[3] for entry in question_entries) if question_entries else 1
+        max_box = max(1, max_box)
+
+        for file_name, _, repeat, box in question_entries:
+            template_idx = (repeat - 1) * max_box + (box - 1)
+            if template_idx < 0 or template_idx >= len(template_frames):
+                print(f"경고: 템플릿 범위를 벗어난 프레임 건너뜀: {file_name}")
+                continue
+            frame_path = os.path.join(output_dir, file_name)
+            frame = cv2.imread(frame_path)
+            if frame is None or frame.size == 0:
+                continue
+
+            tx, ty, tw, th = template_frames[template_idx]
+            target_w = tw - 4
+            target_h = th - 4
+            frame_h, frame_w = frame.shape[:2]
+            frame_ratio = frame_w / frame_h
+            target_ratio = target_w / target_h
+
+            if frame_ratio > target_ratio:
+                new_w = target_w
+                new_h = max(1, int(new_w / frame_ratio))
+            else:
+                new_h = target_h
+                new_w = max(1, int(new_h * frame_ratio))
+
+            resized = cv2.resize(frame, (new_w, new_h))
+            x_offset = tx + 2 + (tw - new_w) // 2
+            y_offset = ty + 2 + (th - new_h) // 2
+            output[y_offset:y_offset + new_h, x_offset:x_offset + new_w] = resized
+            print(f"프레임 배치: {file_name} -> 문제 {question_num} 템플릿 순서 {template_idx + 1}")
 
     if template_name:
         filename = f"{template_name}.png"
@@ -188,6 +280,10 @@ def one_character_detect_and_save_frame(image, output_dir, template_path=None, t
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs("output", exist_ok=True)
     question_idx, repeat_idx = _detect_marked_question_repeat(image, output_dir)
+    original_image = cv2.imread(os.path.join(output_dir, "debug_resized.jpg"))
+    if original_image is None:
+        print("경고: debug_resized.jpg를 찾을 수 없어 origin 저장에 전처리 이미지를 사용합니다.")
+        original_image = image
 
     rect = _find_largest_inner_frame(image)
     height, width = image.shape[:2]
@@ -202,13 +298,24 @@ def one_character_detect_and_save_frame(image, output_dir, template_path=None, t
         print("경고: 프레임 검출 실패. 중앙 영역 fallback 크롭을 사용합니다.")
 
     x, y, w, h = rect
-    inner_pad = max(4, int(min(w, h) * 0.01))
-    x0, y0 = x + inner_pad, y + inner_pad
-    x1, y1 = x + w - inner_pad, y + h - inner_pad
+    padding = max(4, int(min(w, h) * 0.01))
+    x0 = max(0, x + padding)
+    y0 = max(0, y + padding)
+    x1 = min(width, x + w - padding)
+    y1 = min(height, y + h - padding)
 
-    frame = image[y0:y1, x0:x1]
-    if frame.size == 0:
+    raw_frame = image[y0:y1, x0:x1]
+    if raw_frame.size == 0:
         raise ValueError("프레임 추출 결과가 비어 있습니다.")
+    raw_origin_frame = original_image[y0:y1, x0:x1]
+    if raw_origin_frame is None or raw_origin_frame.size == 0:
+        raw_origin_frame = raw_frame
+
+    cleaned_frame = clean_frame_border(raw_frame)
+    if cleaned_frame is not None and cleaned_frame.size > 0:
+        frame = cleaned_frame
+    else:
+        frame = raw_frame
 
     question_tag = f"question{question_idx:02d}"
     frame_name = f"frame_{question_tag}_{repeat_idx}_01.jpg"
@@ -216,7 +323,7 @@ def one_character_detect_and_save_frame(image, output_dir, template_path=None, t
     frame_path = os.path.join(output_dir, frame_name)
     origin_path = os.path.join(output_dir, origin_name)
     cv2.imwrite(frame_path, frame)
-    cv2.imwrite(origin_path, frame)
+    cv2.imwrite(origin_path, raw_origin_frame)
     print(f"1문자 프레임 저장됨: {frame_path}")
 
     debug = image.copy()
@@ -225,4 +332,4 @@ def one_character_detect_and_save_frame(image, output_dir, template_path=None, t
     cv2.imwrite(debug_path, debug)
     print(f"디버그 이미지 저장됨: {debug_path}")
 
-    _create_template_output(frame, template_path, template_name)
+    _create_template_output(output_dir, template_path, template_name)
