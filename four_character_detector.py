@@ -6,13 +6,13 @@ from writing_detector import clean_frame_border
 
 def _detect_marked_question_repeat(image, output_dir):
     """
-    Detect 6 top checkboxes:
-    - Left 3: question 1/2/3
-    - Right 3: repeat 1/2/3
+    Detect top checkboxes:
+    - Upper row 5: question 1/2/3/4/5
+    - Lower row 3: repeat 1/2/3
     Returns (question_idx, repeat_idx) with 1-based indexes.
     """
     h, w = image.shape[:2]
-    top_h = int(h * 0.22)
+    top_h = int(h * 0.26)
     top_area = image[:top_h, :]
 
     gray = cv2.cvtColor(top_area, cv2.COLOR_BGR2GRAY)
@@ -37,8 +37,8 @@ def _detect_marked_question_repeat(image, output_dir):
         candidates.append((x, y, bw, bh))
 
     expected_centers = [
-        (0.22, 0.09), (0.31, 0.09), (0.40, 0.09),
-        (0.68, 0.09), (0.77, 0.09), (0.86, 0.09),
+        (0.19, 0.09), (0.35, 0.09), (0.50, 0.09), (0.66, 0.09), (0.82, 0.09),
+        (0.19, 0.19), (0.35, 0.19), (0.50, 0.19),
     ]
     default_size = max(14, int(min(w, h) * 0.045))
     slots = []
@@ -63,8 +63,8 @@ def _detect_marked_question_repeat(image, output_dir):
             y0 = max(0, cy - default_size // 2)
             slots.append((x0, y0, default_size, default_size))
 
-    left_group = slots[:3]
-    right_group = slots[3:]
+    question_group = slots[:5]
+    repeat_group = slots[5:]
 
     def dark_ratio(rect):
         x, y, bw, bh = rect
@@ -75,20 +75,20 @@ def _detect_marked_question_repeat(image, output_dir):
             return 0.0
         return float(np.mean(roi < 170))
 
-    left_scores = [dark_ratio(r) for r in left_group]
-    right_scores = [dark_ratio(r) for r in right_group]
+    question_scores = [dark_ratio(r) for r in question_group]
+    repeat_scores = [dark_ratio(r) for r in repeat_group]
 
-    question_idx = int(np.argmax(left_scores)) + 1
-    repeat_idx = int(np.argmax(right_scores)) + 1
+    question_idx = int(np.argmax(question_scores)) + 1
+    repeat_idx = int(np.argmax(repeat_scores)) + 1
 
     debug = image.copy()
     for (x, y, bw, bh) in candidates:
         cv2.rectangle(debug, (x, y), (x + bw, y + bh), (80, 80, 80), 1)
-    for i, (x, y, bw, bh) in enumerate(left_group, start=1):
+    for i, (x, y, bw, bh) in enumerate(question_group, start=1):
         color = (0, 255, 0) if i == question_idx else (0, 0, 255)
         cv2.rectangle(debug, (x, y), (x + bw, y + bh), color, 2)
         cv2.putText(debug, f"Q{i}", (x, y - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-    for i, (x, y, bw, bh) in enumerate(right_group, start=1):
+    for i, (x, y, bw, bh) in enumerate(repeat_group, start=1):
         color = (255, 255, 0) if i == repeat_idx else (255, 0, 0)
         cv2.rectangle(debug, (x, y), (x + bw, y + bh), color, 2)
         cv2.putText(debug, f"R{i}", (x, y - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
@@ -103,7 +103,8 @@ def _detect_marked_question_repeat(image, output_dir):
 def _fallback_grid_boxes(image):
     h, w = image.shape[:2]
     x_margin = int(w * 0.045)
-    y_top = int(h * 0.18)
+    # New sheet has a taller top header (question/repeat rows).
+    y_top = int(h * 0.24)
     y_bottom = int(h * 0.88)
     body_h = y_bottom - y_top
     row_h = body_h // 2
@@ -144,7 +145,8 @@ def _detect_four_boxes(image):
         ratio = bw / bh if bh else 0
         if ratio < 0.7 or ratio > 1.3:
             continue
-        if y < int(h * 0.15) or y + bh > int(h * 0.92):
+        # New layout places lower boxes closer to the footer area.
+        if y < int(h * 0.15) or y + bh > int(h * 0.97):
             continue
         candidates.append((x, y, bw, bh))
 
@@ -239,6 +241,7 @@ def _create_template_output(output_dir, template_path, template_name):
         "02": (2, 8),
         "03": (3, 16),
         "04": (4, 24),
+        "05": (5, 32),
     }
 
     for question_num in sorted(question_files.keys()):
@@ -297,9 +300,9 @@ def _create_template_output(output_dir, template_path, template_name):
             print(f"프레임 배치: {file_name} -> 문제 {question_num} 템플릿 순서 {template_idx + 1}")
 
     if template_name:
-        filename = f"{template_name}.png"
+        filename = f"{template_name}.jpg"
     else:
-        filename = "four_character_template_output.png"
+        filename = "four_character_template_output.jpg"
 
     output_path = os.path.join("output", filename)
     cv2.imwrite(output_path, output)
